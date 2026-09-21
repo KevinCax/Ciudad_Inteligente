@@ -1,0 +1,54 @@
+# PostgreSQL local para desarrollo y pruebas.
+#
+# En produccion la base es gestionada y vive en la nube; esta la sustituye
+# durante el desarrollo para no depender de credenciales remotas ni ensuciar
+# los datos reales. Se levanta junto al stack edge:
+#
+#   docker compose -f docker-compose.edge.yml -f docker-compose.dev.yml up -d
+#
+# y entonces DATABASE_URL apunta a postgres:5432 en lugar de a la nube.
+
+name: ciudad-edge
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ciudad-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ciudad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ciudad}
+      POSTGRES_DB: ${POSTGRES_DB:-ciudades}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Los scripts de esta carpeta se ejecutan solo la primera vez que se
+      # inicializa el volumen. Para reaplicarlos hay que borrar el volumen.
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ciudad} -d ${POSTGRES_DB:-ciudades}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # Solo los servicios que escriben en la base esperan a que este lista.
+  # El ingestor no aparece aqui a proposito: ya no depende de PostgreSQL.
+  persister:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  correlator:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  jobs:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

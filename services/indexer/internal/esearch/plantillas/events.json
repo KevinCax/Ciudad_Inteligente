@@ -1,0 +1,42 @@
+{
+  "index_patterns": ["events-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": "true",
+      "properties": {
+        "event_id":       { "type": "keyword" },
+        "event_type":     { "type": "keyword" },
+        "event_version":  { "type": "keyword" },
+        "producer":       { "type": "keyword" },
+        "source":         { "type": "keyword" },
+        "correlation_id": { "type": "keyword" },
+        "trace_id":       { "type": "keyword" },
+        "partition_key":  { "type": "keyword" },
+        "timestamp":      { "type": "date" },
+        "zone":           { "type": "keyword" },
+        "severity":       { "type": "keyword" },
+        "geo":            { "type": "geo_point" },
+        "payload": {
+          "type": "object",
+          "dynamic": "true",
+          "properties": {
+            "placa_vehicular":       { "type": "keyword" },
+            "velocidad_estimada":    { "type": "float" },
+            "velocidad_detectada":   { "type": "float" },
+            "nivel_decibeles":       { "type": "float" },
+            "tipo_sonido_detectado": { "type": "keyword" },
+            "tipo_evento":           { "type": "keyword" },
+            "tipo_de_alerta":        { "type": "keyword" },
+            "mensaje_descriptivo":   { "type": "text" }
+          }
+        }
+      }
+    }
+  }
+}

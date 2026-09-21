@@ -1,0 +1,38 @@
+# Datasources provisionados automaticamente.
+#
+# En el proyecto Java estos archivos solo existian como .example y estaban en
+# .gitignore, asi que cada quien tenia que configurarlos a mano y los
+# dashboards llegaban vacios a la demo. Aqui se versionan, y las credenciales
+# se inyectan por variable de entorno.
+apiVersion: 1
+
+datasources:
+  - name: PostgreSQL-Ciudades
+    type: postgres
+    access: proxy
+    url: ${GRAFANA_PG_HOST}
+    database: ${GRAFANA_PG_DATABASE}
+    user: ${GRAFANA_PG_USER}
+    secureJsonData:
+      password: ${GRAFANA_PG_PASSWORD}
+    jsonData:
+      sslmode: ${GRAFANA_PG_SSLMODE}
+      postgresVersion: 1600
+      timescaledb: false
+    isDefault: true
+
+  - name: Prometheus-Ciudades
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    jsonData:
+      timeInterval: 10s
+
+  - name: Elasticsearch-Ciudades
+    type: elasticsearch
+    access: proxy
+    url: http://elasticsearch:9200
+    database: "events-*"
+    jsonData:
+      timeField: timestamp
+      esVersion: "8.0.0"

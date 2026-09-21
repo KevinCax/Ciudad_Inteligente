@@ -1,0 +1,87 @@
+# Capa NUBE: analitica, busqueda historica y visualizacion.
+#
+# Nada de lo que esta aqui participa del camino critico evento -> alerta. Si
+# esta capa se cae, la Municipalidad sigue detectando y registrando incidentes;
+# lo que se pierde temporalmente es la visualizacion y el analisis historico.
+# Esa separacion es la que justifica el modelo hibrido.
+#
+# En el despliegue real estos servicios corren en el proveedor de nube. Aqui se
+# definen en local para poder demostrar el flujo completo durante la defensa.
+
+name: ciudad-cloud
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: ciudad-elasticsearch
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      # Seguridad deshabilitada solo para el laboratorio. En el despliegue
+      # real va con TLS y autenticacion, y debe quedar dicho en el ADR.
+      xpack.security.enabled: "false"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    container_name: ciudad-kibana
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ciudad-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # Prometheus recoge las metricas de ambos microservicios: es lo que sostiene
+  # el SLO. El sistema Java exponia /metrics con valores fijos en cero, asi que
+  # no habia nada que recoger.
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ciudad-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alertas.yml:/etc/prometheus/alertas.yml:ro
+      - prometheus-data:/prometheus
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+volumes:
+  es-data:
+  grafana-data:
+  prometheus-data:
+
+networks:
+  ciudad_lan:
+    name: ciudad_lan
+    external: true

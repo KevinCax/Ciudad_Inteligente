@@ -1,0 +1,29 @@
+# Credenciales: nunca versionar
+.env
+*.env
+!.env.example
+
+# Llaves de tokenizacion
+*.key
+*.pem
+
+# Binarios compilados
+/bin/
+*.exe
+*.test
+
+# Cobertura y perfiles
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# SO
+.DS_Store
+Thumbs.db
+
+# JetBrains AI
+.junie/

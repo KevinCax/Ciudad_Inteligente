@@ -1,0 +1,295 @@
+# Capa ON-PREMISE (LAN municipal).
+#
+# Todo lo que esta aqui corre dentro de la red de la Municipalidad: el camino
+# critico evento -> alerta no cruza la WAN, de modo que el SLO de 2 segundos no
+# depende del enlace a internet.
+#
+# Kafka corre en modo KRaft, sin Zookeeper: es un componente menos que operar y
+# monitorear, lo que importa cuando el equipo de sistemas del cliente es
+# pequeno. Zookeeper ademas quedo deprecado en Kafka 3.x y eliminado en 4.0.
+
+name: ciudad-edge
+
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: ciudad-kafka
+    ports:
+      - "9092:9092"   # acceso desde el host (simuladores, herramientas)
+    environment:
+      # --- KRaft: el broker es a la vez controlador ---
+      # CLUSTER_ID debe ser un UUID de 16 bytes codificado en base64 sin
+      # relleno (22 caracteres). No admite un nombre legible: Kafka lo decodifica
+      # y verifica la longitud. Se genera una sola vez y se fija aqui, porque el
+      # volumen guarda este identificador y un valor distinto al reiniciar
+      # invalida los datos ya escritos.
+      #   Generar con: kafka-storage random-uuid
+      #   o: python -c "import base64,uuid;print(base64.urlsafe_b64encode(uuid.uuid4().bytes).decode().rstrip('='))"
+      CLUSTER_ID: aANZk83GSbazr9uJyH5-Gw
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # --- Listeners ---
+      # INTERNAL lo usan los servicios dentro de la red de Docker;
+      # EXTERNAL lo usan los simuladores y herramientas desde el host.
+      KAFKA_LISTENERS: INTERNAL://:29092,CONTROLLER://:29093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      # --- Escala de laboratorio: un solo broker ---
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_RETENTION_HOURS: 72
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:29092"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # Crea los topics una sola vez y termina.
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: ciudad-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/scripts:ro
+    # tr -d '\r' evita que los finales de linea de Windows rompan el script.
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /scripts/create-topics.sh | /bin/sh"]
+    restart: "no"
+    networks: [ciudad_lan]
+
+  redis:
+    image: redis:7-alpine
+    container_name: ciudad-redis
+    ports:
+      - "6379:6379"
+    # appendonly conserva las ventanas de correlacion si el contenedor se
+    # reinicia. Sin esto, un reinicio vacia el estado y se pierden las
+    # correlaciones en curso.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # El ingestor no habla con la base de datos: solo valida, deduplica en Redis
+  # y publica en Kafka. Todas sus dependencias estan en la LAN, de modo que una
+  # caida del enlace a internet no detiene la ingesta de eventos.
+  ingestor:
+    build:
+      context: ../services/ingestor
+      dockerfile: Dockerfile
+    image: ciudad-inteligente/ingestor:latest
+    container_name: ciudad-ingestor
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      SERVER_PORT: 8000
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC_EVENTS: events.standardized
+      KAFKA_TOPIC_DLQ: events.dlq
+      REDIS_ADDR: redis:6379
+      DEDUPE_TTL: ${DEDUPE_TTL:-24h}
+      PARTITION_KEY_STRATEGY: ${PARTITION_KEY_STRATEGY:-zone}
+      API_KEY: ${INGESTOR_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    healthcheck:
+      # La imagen es distroless y no trae shell ni curl, asi que el health se
+      # comprueba desde fuera con docker inspect o desde el propio binario.
+      # Aqui se deja el chequeo a nivel de compose deshabilitado a proposito.
+      disable: true
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  correlator:
+    build:
+      context: ../services/correlator
+      dockerfile: Dockerfile
+    image: ciudad-inteligente/correlator:latest
+    container_name: ciudad-correlator
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: 8080
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC_EVENTS: events.standardized
+      KAFKA_TOPIC_ALERTS: correlated.alerts
+      KAFKA_TOPIC_DLQ: events.dlq
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-correlator-go}
+      KAFKA_CONSUME_FROM_START: ${KAFKA_CONSUME_FROM_START:-false}
+      REDIS_ADDR: redis:6379
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es obligatoria}
+      CORRELATION_SEEN_TTL: ${CORRELATION_SEEN_TTL:-10m}
+      CORRELATION_WINDOW_TTL: ${CORRELATION_WINDOW_TTL:-10m}
+      ALERT_SUPPRESS_TTL: ${ALERT_SUPPRESS_TTL:-5m}
+      RULE_VERSION: ${RULE_VERSION:-1.0}
+      API_TOKEN: ${CORRELATOR_API_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    healthcheck:
+      disable: true
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # El persister se situa sobre la frontera LAN -> nube: consume de Kafka (LAN)
+  # y escribe en PostgreSQL (nube), tokenizando la placa antes de que el dato
+  # salga del control municipal. Es el unico servicio de esta capa que depende
+  # del enlace a internet, y por eso es el unico que puede detenerse sin que la
+  # ciudad deje de detectar incidentes.
+  persister:
+    build:
+      context: ../services/persister
+      dockerfile: Dockerfile
+    image: ciudad-inteligente/persister:latest
+    container_name: ciudad-persister
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+    environment:
+      SERVER_PORT: 8002
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC_EVENTS: events.standardized
+      KAFKA_TOPIC_DLQ: events.dlq
+      KAFKA_CONSUMER_GROUP: ${PERSISTER_CONSUMER_GROUP:-persister-go}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es obligatoria}
+      BATCH_SIZE: ${BATCH_SIZE:-100}
+      BATCH_TIMEOUT: ${BATCH_TIMEOUT:-2s}
+      PLATE_HMAC_KEY: ${PLATE_HMAC_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    healthcheck:
+      disable: true
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # El indexer, como el persister, esta sobre la frontera LAN -> nube: consume
+  # de Kafka (LAN) y escribe en Elasticsearch (nube), tokenizando la placa
+  # antes de que el dato cruce. Sustituye al ETL horario del sistema Java: la
+  # busqueda queda al dia en segundos en lugar de en una hora (ADR-009).
+  #
+  # Usa la MISMA llave HMAC que el persister: si difirieran, el mismo vehiculo
+  # tendria seudonimos distintos en PostgreSQL y en Elasticsearch.
+  indexer:
+    build:
+      context: ../services/indexer
+      dockerfile: Dockerfile
+    image: ciudad-inteligente/indexer:latest
+    container_name: ciudad-indexer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+    environment:
+      SERVER_PORT: 8003
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC_EVENTS: events.standardized
+      KAFKA_TOPIC_ALERTS: correlated.alerts
+      KAFKA_TOPIC_DLQ: events.dlq
+      KAFKA_CONSUMER_GROUP: ${INDEXER_CONSUMER_GROUP:-indexer-go}
+      ELASTICSEARCH_URL: ${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      BATCH_SIZE: ${BATCH_SIZE:-100}
+      BATCH_TIMEOUT: ${BATCH_TIMEOUT:-2s}
+      PLATE_HMAC_KEY: ${PLATE_HMAC_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    healthcheck:
+      disable: true
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # Tareas periodicas: agregados diarios y retencion del historico.
+  # Sustituye a Airflow (ADR-009): duerme casi todo el tiempo y despierta dos
+  # veces al dia. El cerrojo en Redis garantiza una ejecucion aunque haya
+  # varias instancias o el proceso se reinicie.
+  jobs:
+    build:
+      context: ../services/jobs
+      dockerfile: Dockerfile
+    image: ciudad-inteligente/jobs:latest
+    container_name: ciudad-jobs
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8004:8004"
+    environment:
+      SERVER_PORT: 8004
+      TZ_TAREAS: ${TZ_TAREAS:-America/Guatemala}
+      HORA_AGREGADOS: ${HORA_AGREGADOS:-03:00}
+      HORA_RETENCION: ${HORA_RETENCION:-03:30}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es obligatoria}
+      REDIS_ADDR: redis:6379
+      ELASTICSEARCH_URL: ${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      RETENCION_DIAS_PLACA: ${RETENCION_DIAS_PLACA:-90}
+      RETENCION_DIAS_COORDENADAS: ${RETENCION_DIAS_COORDENADAS:-365}
+      RETENCION_DIAS_BORRADO: ${RETENCION_DIAS_BORRADO:-730}
+      RETENCION_MESES_INDICES: ${RETENCION_MESES_INDICES:-12}
+      API_TOKEN: ${JOBS_API_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    healthcheck:
+      disable: true
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: ciudad-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: ciudad-lan
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+volumes:
+  kafka-data:
+  redis-data:
+
+networks:
+  ciudad_lan:
+    name: ciudad_lan
+    driver: bridge

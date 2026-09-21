@@ -1,0 +1,233 @@
+# Reglas de alerta sobre los objetivos de nivel de servicio.
+#
+# El enunciado pide definir que ocurre cuando un SLO se incumple, "mas alla de
+# tener dashboards en Grafana". Un tablero solo avisa a quien lo esta mirando;
+# estas reglas avisan aunque no haya nadie delante.
+#
+# Cada alerta lleva en su anotacion "accion" el primer paso concreto de
+# diagnostico, para que quien la reciba a las tres de la madrugada no tenga que
+# deducirlo.
+#
+# Convencion de severidad:
+#   critica  -> el sistema no cumple su proposito; atender de inmediato
+#   aviso    -> se esta consumiendo presupuesto de error; atender en horario
+#   info     -> conviene saberlo, no exige accion inmediata
+
+groups:
+  # =========================================================================
+  # SLO 1 — Latencia de deteccion: alerta en menos de 2 s desde el evento
+  # =========================================================================
+  - name: slo-latencia-deteccion
+    interval: 30s
+    rules:
+      - alert: SLOLatenciaDeteccionIncumplido
+        # Proporcion de alertas generadas por encima del objetivo de 2 s.
+        expr: |
+          (
+            sum(rate(correlator_correlation_latency_seconds_count[30m]))
+            -
+            sum(rate(correlator_correlation_latency_seconds_bucket{le="2"}[30m]))
+          )
+          /
+          sum(rate(correlator_correlation_latency_seconds_count[30m]))
+          > 0.01
+        for: 10m
+        labels:
+          severidad: critica
+          slo: latencia_deteccion
+        annotations:
+          resumen: "Mas del 1% de las alertas tarda mas de 2 s en generarse"
+          descripcion: >-
+            El objetivo es que el 99% de las alertas se genere en menos de 2 s
+            desde el timestamp del evento disparador. Actualmente el
+            {{ $value | humanizePercentage }} lo incumple.
+          accion: >-
+            1) Revisar el lag del consumidor: si crece, el correlator no sigue
+            el ritmo de la ingesta. 2) Revisar correlator_window_events: una
+            ventana desproporcionada encarece cada evaluacion. 3) Si ambos son
+            normales, sospechar de Redis.
+
+      - alert: LatenciaDeteccionDegradandose
+        # Aviso temprano: el percentil 95 supera la mitad del presupuesto.
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(correlator_correlation_latency_seconds_bucket[15m])) by (le)
+          ) > 1
+        for: 15m
+        labels:
+          severidad: aviso
+          slo: latencia_deteccion
+        annotations:
+          resumen: "El p95 de latencia de deteccion supera 1 s"
+          descripcion: >-
+            Aun se cumple el SLO, pero se ha consumido la mitad del margen.
+          accion: >-
+            Revisar la tendencia antes de que se convierta en incumplimiento.
+
+  # =========================================================================
+  # SLO 2 — Integridad: lo que se acepta con 202 termina archivado
+  # =========================================================================
+  - name: slo-integridad
+    interval: 30s
+    rules:
+      - alert: EventosRechazadosEnAumento
+        expr: sum(rate(ingestor_events_rejected_total{reason!="duplicado"}[10m])) > 0.5
+        for: 10m
+        labels:
+          severidad: aviso
+          slo: integridad
+        annotations:
+          resumen: "Mas de 0.5 eventos/s rechazados por {{ $labels.reason }}"
+          descripcion: >-
+            Los duplicados estan excluidos a proposito: son comportamiento
+            correcto de la deduplicacion, no un fallo.
+          accion: >-
+            Si el motivo es 'contrato', revisar la DLQ: probablemente un
+            productor cambio su formato. Si es 'kafka_no_disponible' o
+            'redis_no_disponible', es infraestructura.
+
+      - alert: DLQRecibiendoMensajes
+        expr: sum(rate(ingestor_dlq_publicados_total[15m])) + sum(rate(correlator_dlq_published_total[15m])) + sum(rate(persister_dlq_publicados_total[15m])) > 0
+        for: 15m
+        labels:
+          severidad: aviso
+          slo: integridad
+        annotations:
+          resumen: "Estan llegando mensajes a la cola de mensajes muertos"
+          descripcion: >-
+            Cada mensaje en la DLQ es un evento que no se proceso. La retencion
+            es de 14 dias, pasados los cuales se pierde.
+          accion: >-
+            Inspeccionar el topic events.dlq. El campo 'reason' agrupa por causa
+            y 'original_payload' permite reprocesar una vez corregida.
+
+      - alert: ArchivoHistoricoAtrasado
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(persister_retraso_archivo_seconds_bucket[10m])) by (le)
+          ) > 300
+        for: 10m
+        labels:
+          severidad: aviso
+          slo: integridad
+        annotations:
+          resumen: "El archivo historico acumula mas de 5 minutos de retraso"
+          descripcion: >-
+            La deteccion no esta afectada: el correlator no depende del
+            archivado. Lo que se retrasa son los tableros y las consultas
+            historicas.
+          accion: >-
+            Verificar el enlace a la nube y la salud de PostgreSQL. Si ambos
+            estan bien, revisar si BATCH_SIZE se quedo corto para el volumen.
+
+  # =========================================================================
+  # SLO 3 — Disponibilidad de la ingesta
+  # =========================================================================
+  - name: slo-disponibilidad
+    interval: 30s
+    rules:
+      - alert: IngestaNoDisponible
+        expr: |
+          sum(rate(ingestor_request_duration_seconds_count{status=~"5.."}[5m]))
+          /
+          sum(rate(ingestor_request_duration_seconds_count[5m]))
+          > 0.005
+        for: 5m
+        labels:
+          severidad: critica
+          slo: disponibilidad
+        annotations:
+          resumen: "Mas del 0.5% de las peticiones de ingesta falla con 5xx"
+          descripcion: >-
+            Un 503 significa que Redis o Kafka no responden. Ambos estan en la
+            LAN: el fallo es local, no del proveedor de nube.
+          accion: >-
+            Revisar /events/health del ingestor, que identifica cual de las dos
+            dependencias esta caida.
+
+      - alert: ServicioCaido
+        expr: up{job=~"ingestor|correlator|persister"} == 0
+        for: 2m
+        labels:
+          severidad: critica
+        annotations:
+          resumen: "El servicio {{ $labels.job }} no responde"
+          accion: >-
+            Si el caido es 'persister', la deteccion continua y solo se retrasa
+            el archivo. Si es 'ingestor' o 'correlator', la ciudad ha dejado de
+            detectar incidentes: es la maxima prioridad.
+
+  # =========================================================================
+  # Salud interna del sistema
+  # =========================================================================
+  - name: salud-interna
+    interval: 60s
+    rules:
+      - alert: SinEventosIngeridos
+        # Un sistema de vigilancia que no recibe nada suele estar roto, no en
+        # calma. Ventana amplia para no disparar de madrugada.
+        expr: sum(rate(ingestor_events_ingested_total[30m])) == 0
+        for: 30m
+        labels:
+          severidad: aviso
+        annotations:
+          resumen: "No se ha ingerido ningun evento en 30 minutos"
+          descripcion: >-
+            Puede ser legitimo en horario de muy baja actividad, pero lo
+            habitual es que sea un fallo de los simuladores o de la red de
+            sensores.
+          accion: >-
+            Verificar conectividad desde los puntos de sensado hacia el
+            ingestor.
+
+      - alert: VentanaDeCorrelacionDesproporcionada
+        expr: max(correlator_window_events) > 5000
+        for: 10m
+        labels:
+          severidad: aviso
+        annotations:
+          resumen: "La zona {{ $labels.zone }} acumula mas de 5000 eventos en ventana"
+          descripcion: >-
+            Cada evaluacion recorre la ventana completa, asi que un tamano
+            desproporcionado degrada la latencia de deteccion.
+          accion: >-
+            Comprobar que la poda por marca de tiempo funciona y revisar si
+            CORRELATION_WINDOW_TTL es mayor de lo necesario.
+
+      - alert: MuchasAlertasSuprimidas
+        expr: |
+          sum(rate(correlator_alerts_suppressed_total[15m]))
+          /
+          (sum(rate(correlator_alerts_generated_total[15m])) + sum(rate(correlator_alerts_suppressed_total[15m])))
+          > 0.9
+        for: 15m
+        labels:
+          severidad: info
+        annotations:
+          resumen: "Se esta suprimiendo mas del 90% de las alertas"
+          descripcion: >-
+            La supresion evita alertas duplicadas, pero una proporcion tan alta
+            sugiere que ALERT_SUPPRESS_TTL es demasiado largo y podria estar
+            ocultando incidentes distintos en la misma zona.
+          accion: >-
+            Revisar el valor de ALERT_SUPPRESS_TTL frente a la frecuencia real
+            de incidentes por zona.
+
+      - alert: TasaAltaDeFalsosPositivos
+        expr: |
+          sum(rate(correlator_false_positive_candidates_total[1h]))
+          /
+          (sum(rate(correlator_alerts_generated_total[1h])) + sum(rate(correlator_false_positive_candidates_total[1h])))
+          > 0.5
+        for: 1h
+        labels:
+          severidad: info
+        annotations:
+          resumen: "Mas de la mitad de las coincidencias parciales no se completa"
+          descripcion: >-
+            Una coincidencia parcial cuya ventana expira es un falso positivo
+            confirmado. Una proporcion alta sugiere umbrales o ventanas mal
+            calibrados.
+          accion: >-
+            Analizar por regla y por zona. Puede justificar ajustar las ventanas
+            temporales o los umbrales de velocidad.

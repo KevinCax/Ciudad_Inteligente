@@ -1,0 +1,51 @@
+# Recoleccion de metricas de los microservicios.
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+  external_labels:
+    sistema: ciudad-inteligente
+    cliente: municipalidad-guatemala
+
+# Reglas de alerta sobre los SLO. Ver alertas.yml.
+rule_files:
+  - /etc/prometheus/alertas.yml
+
+scrape_configs:
+  - job_name: ingestor
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ingestor:8000"]
+        labels:
+          capa: edge
+
+  - job_name: persister
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["persister:8002"]
+        labels:
+          capa: edge
+
+  - job_name: indexer
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["indexer:8003"]
+        labels:
+          capa: edge
+
+  - job_name: jobs
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["jobs:8004"]
+        labels:
+          capa: edge
+
+  - job_name: correlator
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["correlator:8080"]
+        labels:
+          capa: edge
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

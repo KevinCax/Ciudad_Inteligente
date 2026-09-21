@@ -1,0 +1,32 @@
+{
+  "index_patterns": ["alerts-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": "strict",
+      "properties": {
+        "alert_id":       { "type": "keyword" },
+        "correlation_id": { "type": "keyword" },
+        "type":           { "type": "keyword" },
+        "score":          { "type": "float" },
+        "zone":           { "type": "keyword" },
+        "geo":            { "type": "geo_point" },
+        "window": {
+          "type": "object",
+          "properties": {
+            "start": { "type": "date" },
+            "end":   { "type": "date" }
+          }
+        },
+        "evidence":     { "type": "keyword" },
+        "created_at":   { "type": "date" },
+        "rule_version": { "type": "keyword" }
+      }
+    }
+  }
+}
