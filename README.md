@@ -112,62 +112,6 @@ En Windows con Git Bash (sin `make`):
 
 Ambos ejecutan lo mismo: verificación de contratos, formato, `vet` y tests. Los targets disponibles son `sync-contracts`, `check-contracts`, `tidy`, `fmt`, `vet`, `test`, `build`, `docker` y `check`.
 
-## Decisiones de arquitectura
-
-Las decisiones relevantes se documentan como ADR en [`docs/adr/`](docs/adr/), con el formato que exige el enunciado: contexto, opciones consideradas con sus trade-offs, decisión, consecuencias e impacto en el negocio.
-
-| ADR | Decisión | Estado |
-|---|---|---|
-| [001](docs/adr/001-plataforma-de-despliegue.md) | Plataforma de despliegue: híbrido LAN + nube | Aceptado |
-| [002](docs/adr/002-lenguaje-y-runtime.md) | Lenguaje y runtime: Go sobre Java/Spring Boot | Aceptado |
-| [006](docs/adr/006-resiliencia-y-tolerancia-a-fallos.md) | Resiliencia: DLQ, offsets manuales y pérdida aceptable | Aceptado |
-| [007](docs/adr/007-privacidad-y-datos-personales.md) | Privacidad: seudonimización en la frontera LAN–nube | Aceptado |
-| [008](docs/adr/008-observabilidad-y-slo.md) | Observabilidad y objetivos de nivel de servicio | Aceptado |
-| [009](docs/adr/009-orquestacion-de-tareas-periodicas.md) | Orquestación de tareas periódicas: retirar Airflow | Aceptado |
-| 003–005 | Repositorio, broker, persistencia | Pendientes |
-
-## Diferencias deliberadas con el sistema Java
-
-La migración corrige defectos del sistema de referencia en lugar de traducirlos. Los principales:
-
-| Sistema Java | Backend en Go |
-|---|---|
-| La regla `accident` era inalcanzable: filtraba LPR con velocidad > 80 y luego exigía < 40 sobre esa misma lista | La ventana conserva todos los LPR y la caída de velocidad se evalúa sobre el conjunto completo |
-| `score` se persistía como `Integer`: 0.85, 0.90 y 0.95 se guardaban como `1` | `score` es `float64` sobre columna `numeric`, y el contrato lo acota entre 0 y 1 |
-| Respondía `202` antes de confirmar la publicación en Kafka; sin DLQ | Publicación con `acks=all` confirmada antes de responder, y `events.dlq` para lo que no cumple contrato |
-| Idempotencia con `hasKey` + `set`, no atómica | `SET NX EX` en una sola operación |
-| Listas de Redis que nunca expiraban y se leían completas por evento | Sorted sets con poda por marca de tiempo |
-| Cada evento re-disparaba la regla sobre la misma evidencia | Supresión de alertas por tipo, zona y ventana |
-| `partition_key = event_type`: 5 claves para 3 particiones | `partition_key = geo.zone` por defecto, con afinidad real por zona |
-| Validaba el objeto ya deserializado, así que `additionalProperties:false` nunca detectaba nada | Valida el JSON crudo antes de deserializar |
-| `/metrics` devolvía `{"alerts":0,"events":0}` fijo | Métricas Prometheus reales, incluida la latencia que sostiene el SLO |
-| `sensor.speed` en el contrato pero sin regla que lo consumiera | Incorporado a la regla de posible robo, como describe el enunciado |
-
-La estrategia de particionado es configurable (`PARTITION_KEY_STRATEGY`) para poder correr ambos sistemas en paralelo durante la migración y comparar salidas evento por evento.
-
-## Estado
-
-| Componente | Estado |
-|---|---|
-| Contratos (evento canónico y alerta) | Listo |
-| **Ingestor completo** — pipeline, persistencia, publicación, DLQ, auth, tokenización, métricas | **Listo** |
-| **Correlator completo** — consumidor, ventanas, motor de reglas, supresión, falsos positivos, API | **Listo** |
-| **Persister completo** — archivado por lotes en PostgreSQL, tokenización, DLQ | **Listo** |
-| **Indexer completo** — indexación por lotes en Elasticsearch, plantillas, índices mensuales | **Listo** |
-| **Despliegue** — compose edge, dev y nube | **Escrito, sin ejecutar** |
-| **Pruebas de carga** | **Listo** |
-| ADR-001 (plataforma de despliegue) | Listo |
-| ADR-002 (lenguaje y runtime) | Listo |
-| ADR-006 (resiliencia y tolerancia a fallos) | Listo |
-| ADR-007 (privacidad y datos personales) | Listo |
-| ADR-008 (observabilidad y SLO) | Listo |
-| ADR-009 (orquestación de tareas periódicas) | Listo |
-| **Mínimo de seis ADR exigido** | **Cumplido** |
-| ADR-003 a 005 (registro completo) | Pendientes |
-| Servicio `jobs` — retención y agregados nocturnos (ADR-009) | Pendiente |
-| Informe final APA 7 | Pendiente |
-| Informe final APA 7 | Pendiente |
-
 ### API del ingestor (:8000)
 
 | Método | Ruta | Respuestas |
