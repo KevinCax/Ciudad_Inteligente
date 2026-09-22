@@ -101,6 +101,8 @@ case "${1:-help}" in
     # Prueba de carga. Pasa el escenario como segundo argumento:
     #   ./make.sh load rafaga
     #   ./make.sh load alertas
+    #   ./make.sh load bulk
+    #   ./make.sh load enunciado
     ( cd test/load && "$GO" run . -escenario "${2:-sostenido}" )
     ;;
 
@@ -108,6 +110,10 @@ case "${1:-help}" in
     # Valida la sintaxis de los compose sin necesidad del demonio de Docker.
     docker compose -f deploy/docker-compose.edge.yml                    -f deploy/docker-compose.dev.yml --env-file deploy/.env config --quiet       && echo "edge + dev: sintaxis correcta"
     docker compose -f deploy/docker-compose.cloud.yml                    --env-file deploy/.env config --quiet       && echo "cloud: sintaxis correcta"
+    ;;
+  adr)
+    # Consolida los ADR en el documento anexo que pide el enunciado (4.2).
+    python docs/consolidar-adr.py
     ;;
   check)
     check_contracts
@@ -122,6 +128,7 @@ case "${1:-help}" in
     echo ""
     echo "Codigo:      sync-contracts check-contracts tidy fmt vet test build docker check"
     echo "Despliegue:  up up-cloud down logs config"
-    echo "Pruebas:     load [sostenido|rafaga|alertas]"
+    echo "Documentos:  adr"
+    echo "Pruebas:     load [sostenido|rafaga|alertas|bulk|enunciado]"
     ;;
 esac

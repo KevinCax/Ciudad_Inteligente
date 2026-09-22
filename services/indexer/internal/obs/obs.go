@@ -130,8 +130,9 @@ func NewMetrics() *Metrics {
 		}, []string{"flujo"}),
 
 		// Distancia entre el momento del evento y su disponibilidad para
-		// busqueda. Es lo que mide la mejora frente al ETL horario del sistema
-		// Java, donde este valor podia acercarse a una hora.
+		// busqueda. Los buckets llegan a 3600 s a proposito: con una copia
+		// periodica desde la base en lugar de consumo del broker, este valor
+		// se acercaria al intervalo de esa copia.
 		RetrasoIndice: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "indexer_retraso_indice_seconds",
 			Help:    "Tiempo entre el timestamp del evento y su indexacion.",

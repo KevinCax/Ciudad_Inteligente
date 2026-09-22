@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.edu/correlated-alert/1-0.schema.json",
   "title": "CorrelatedAlertV1",
-  "description": "Contrato de salida del Correlator hacia el topic correlated.alerts. Derivado de Final-Project-Guide.md seccion 5.1.",
+  "description": "Contrato de salida del Correlator hacia el topic correlated.alerts. Derivado del enunciado del proyecto, seccion 5.1.",
   "type": "object",
   "required": ["alert_id","type","score","zone","window","evidence","created_at"],
   "properties": {

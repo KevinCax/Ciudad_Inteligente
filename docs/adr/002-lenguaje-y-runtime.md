@@ -1,4 +1,4 @@
-# ADR-002: Lenguaje y runtime de los microservicios — Go sobre Java/Spring Boot
+# ADR-002: Lenguaje y runtime de los microservicios — Go
 
 **Estado:** aceptado
 **Fecha:** 2026-09-21
@@ -9,195 +9,184 @@
 
 ## 1. Contexto
 
-Existía un sistema funcionando en Java 17 con Spring Boot 3.5.5: dos
-microservicios, ingestor y correlator, con Kafka, Redis y PostgreSQL. Cambiar
-de lenguaje una base que ya funciona es una decisión que exige justificación, no
-al revés.
+Hay que elegir el lenguaje y el tiempo de ejecución de los cinco
+microservicios. Es de las decisiones más caras de revertir del proyecto: una
+vez escrito el sistema, cambiar de lenguaje significa escribirlo otra vez.
 
-El enunciado del proyecto (sección 5) presenta su stack como **punto de
-partida, no como imposición**, y admite explícitamente modificarlo o
-reemplazarlo siempre que la decisión quede registrada como ADR. Ese permiso
-abre la puerta, pero no la justifica.
+El enunciado (sección 5) presenta su stack como **punto de partida, no como
+imposición**, y admite explícitamente modificarlo o reemplazarlo siempre que la
+decisión quede registrada como ADR.
 
-Dos hechos del contexto pesan sobre la decisión:
+Dos hechos del contexto pesan sobre la elección, y ambos vienen del cliente
+declarado en [ADR-001](001-plataforma-de-despliegue.md):
 
-**El hardware es limitado y propio.** [ADR-001](001-plataforma-de-despliegue.md)
-sitúa la detección en servidores del centro de datos municipal. Sobre esas dos
-máquinas conviven los microservicios, Kafka, Redis y el sistema operativo. Cada
-megabyte de memoria que consume un servicio es un megabyte que no está
-disponible para el broker, y no hay elasticidad: el hardware es el que se
-compró.
+**El hardware es limitado y propio.** La detección corre en servidores del
+centro de datos municipal. Sobre esas dos máquinas conviven los cinco
+microservicios, Kafka, Redis, la observabilidad y el sistema operativo. Cada
+megabyte que consume un servicio es un megabyte que no está disponible para el
+broker, y **no hay elasticidad**: el hardware es el que se compró.
 
 **El equipo que lo opera es reducido.** No hay una persona dedicada a ajustar
-la JVM, diagnosticar pausas del recolector de basura o dimensionar *heaps*.
+una máquina virtual, diagnosticar pausas del recolector de basura o dimensionar
+montones de memoria. Toda especialidad que el sistema exija es una especialidad
+que alguien tendrá que adquirir o contratar.
 
-### El estado real del sistema heredado
-
-Una revisión del código Java encontró defectos que conviene enumerar porque
-condicionan la decisión:
-
-- La regla de correlación `accident` era **matemáticamente inalcanzable**:
-  filtraba las lecturas de velocidad a las mayores de 80 y después buscaba,
-  sobre esa misma lista, una caída por debajo de 40.
-- El `score` de las alertas se declaraba `Integer` y se redondeaba, de modo que
-  0.85, 0.90 y 0.95 se guardaban los tres como `1`.
-- El ingestor respondía `202` antes de confirmar la publicación en Kafka, así
-  que un fallo dejaba el evento en la base sin llegar nunca al correlator.
-- No existía cola de mensajes muertos: todo lo que fallaba se descartaba en
-  silencio.
-- `/metrics` devolvía `{"alerts":0,"events":0}` fijo.
-
-Ninguno de estos defectos es culpa de Java. Todos son corregibles en Java. Pero
-su número indica que el sistema necesitaba una revisión profunda, y eso abre la
-pregunta de si conviene hacerla sobre la base existente o desde cero.
+De ahí el criterio: entre lenguajes que resuelven el problema igual de bien
+—y son varios—, decide **cuánto cuesta operar el resultado**.
 
 ## 2. Opciones consideradas
 
-### Opción A — Mantener Java/Spring Boot y corregir en el sitio
+### Opción A — Java con Spring Boot
 
-Arreglar los defectos sobre el código existente, sin reescribir.
+Es el stack de referencia implícito del curso y el más extendido en sistemas
+empresariales de este tipo.
 
 **A favor**
 
-- El equipo ya conoce el lenguaje y el framework.
-- Es la opción más barata en tiempo, y el tiempo es el recurso escaso.
+- **El cliente de Kafka para Java es el más maduro del ecosistema**, con
+  productor idempotente completo, que es lo que la guía recomienda.
 - Spring Boot aporta mucho resuelto: inyección de dependencias, validación,
-  abstracciones sobre Kafka, *actuator* para salud y métricas.
-- El cliente de Kafka para Java es el más maduro del ecosistema, con productor
-  idempotente completo.
+  abstracciones sobre Kafka, endpoints de salud y métricas.
+- Es lo que más probablemente conozca quien herede el sistema.
+- Ecosistema enorme: para cualquier problema hay biblioteca y documentación.
 
 **En contra**
 
-- Se conserva la huella de la JVM, que es la restricción real sobre hardware
-  propio y limitado.
-- Corregir en el sitio tiende a dejar intactas las decisiones que causaron los
-  defectos. El filtro que hacía inalcanzable la regla `accident` no era un
-  error de sintaxis: era una decisión de diseño equivocada, del tipo que se
-  arrastra cuando solo se parchea.
-- Las abstracciones de Spring sobre Kafka ocultan justamente lo que este
-  sistema necesita controlar: cuándo se confirma un offset y cuándo se
-  considera publicado un mensaje.
+- **La huella de la máquina virtual es la restricción real** sobre hardware
+  propio y acotado. Una imagen base de Java ronda los 250 MB antes de añadir la
+  aplicación, y el consumo típico de un servicio Spring Boot está en el orden
+  de los cientos de megabytes.
+- Arranque en segundos, no en milisegundos: reiniciar un contenedor es una
+  interrupción perceptible del servicio.
+- Ajustar la máquina virtual es una especialidad, y el equipo que operará el
+  sistema no la tiene.
+- **Las abstracciones de Spring sobre Kafka ocultan justamente lo que este
+  sistema necesita controlar**: cuándo se confirma un offset y cuándo se
+  considera publicado un mensaje. Son decisiones centrales del
+  [ADR-006](006-resiliencia-y-tolerancia-a-fallos.md), y pelearse con una
+  abstracción para tomarlas es peor que escribirlas.
 
-### Opción B — Reescribir en Java, corrigiendo el diseño
-
-Rehacer los servicios desde cero, pero en el mismo lenguaje.
+### Opción B — Node.js con TypeScript, o Python
 
 **A favor**
 
-- Se obtiene el beneficio de revisar cada decisión, que es de donde salieron
-  los hallazgos.
-- Sin curva de aprendizaje.
+- Desarrollo rápido y curva de aprendizaje suave.
+- Python encaja bien con el resto del ecosistema de simulación y análisis.
+- Huella menor que la de una máquina virtual de Java.
 
 **En contra**
 
-- Se paga el costo completo de una reescritura sin obtener ninguna mejora
-  operativa: la huella y el tiempo de arranque siguen siendo los de la JVM.
+- **Un solo hilo de ejecución efectivo.** La correlación evalúa reglas sobre
+  ventanas mientras consume de Kafka y atiende peticiones HTTP; el modelo de un
+  solo hilo obliga a rodearlo con procesos, y eso multiplica la huella que se
+  quería ahorrar.
+- Sigue haciendo falta un intérprete y sus dependencias dentro de la imagen: no
+  hay binario autocontenido.
+- El tipado dinámico de Python es un riesgo real en un sistema cuyo núcleo es
+  un contrato de datos: los errores de forma aparecen en ejecución.
 
-> Esta opción existe en el análisis por una razón: **separa el valor de
-> reescribir del valor de cambiar de lenguaje.** Sin ella sería fácil
-> atribuirle a Go méritos que en realidad corresponden a la reescritura.
-
-### Opción C — Reescribir en Go
+### Opción C — Go
 
 **A favor**
 
-- Binario estático sin runtime externo: imágenes de contenedor un orden de
+- **Binario estático sin runtime externo**: imágenes de contenedor un orden de
   magnitud más pequeñas y memoria residente en decenas de megabytes.
 - Arranque en milisegundos, lo que hace que reiniciar un contenedor sea
-  imperceptible en lugar de una interrupción de servicio.
-- Sin recolector de basura que ajustar ni *heap* que dimensionar: un equipo
-  reducido no necesita esa especialidad.
-- El modelo de concurrencia encaja con la forma del problema. El persister
+  imperceptible en lugar de una interrupción.
+- Sin máquina virtual que ajustar ni montón de memoria que dimensionar: un
+  equipo reducido no necesita esa especialidad.
+- **El modelo de concurrencia encaja con la forma del problema.** El persister
   acumula lotes mientras vence un temporizador y atiende una señal de apagado:
   eso son tres goroutines y un `select`, no un framework.
 - Menos dependencias, y por tanto menos superficie que auditar.
+- El binario estático permite una imagen `distroless` sin intérprete de
+  comandos, lo que reduce lo que un atacante puede hacer dentro del contenedor.
 
 **En contra**
 
 - **Curva de aprendizaje**, con una fecha de entrega fija.
-- El ecosistema de Kafka en Go es menos maduro. `segmentio/kafka-go` no ofrece
-  productor idempotente completo, que la guía del curso recomienda.
-- Hay que escribir a mano lo que Spring daba resuelto: carga de configuración,
+- **El ecosistema de Kafka en Go es menos maduro.** `segmentio/kafka-go` no
+  ofrece productor idempotente completo, que la guía recomienda.
+- Hay que escribir a mano lo que Spring daría resuelto: carga de configuración,
   middleware HTTP, registro de métricas.
 - **Consume tiempo que podría ir a la documentación**, que pesa más en la
   evaluación que la implementación.
 
 ## 3. Decisión
 
-**Se reescriben los microservicios en Go (opción C).**
+**Se adopta Go (opción C).**
 
-### Qué aporta Go que no aporta la reescritura
+### 3.1 Lo que decide es la huella sobre hardware que no crece
 
-La opción B obliga a ser precisos. Comparando C contra B —es decir,
-descontando todo lo que aporta reescribir— lo que Go añade es:
+El criterio no es la elegancia del lenguaje: es que los servicios conviven con
+Kafka y Redis en dos máquinas fijas.
 
-| Aspecto | Medido |
+| Aspecto | Medido en este sistema |
 |---|---|
-| Tamaño de imagen | 23–29 MB por servicio, completa |
-| Memoria residente | 15–19 MB por servicio |
-| Tiempo de arranque | 7–50 ms |
+| Tamaño de imagen | 23 – 29 MB por servicio, completa |
+| Memoria residente | 15 – 19 MB por servicio |
+| Tiempo de arranque | 7 – 50 ms |
 
-Frente a eso, la imagen base que usaba el sistema Java —`eclipse-temurin:17-jre-alpine`,
-**257 MB antes de añadir el jar de la aplicación**— y un consumo típico de
-Spring Boot en el orden de los cientos de megabytes.
+Frente a eso, una imagen base de Java —`eclipse-temurin:17-jre-alpine`, **257
+MB antes de añadir la aplicación**— y un consumo de Spring Boot en el orden de
+los cientos de megabytes.
 
-Sobre los dos servidores del centro de datos municipal, con tres servicios más
-Kafka, Redis y el sistema operativo, esa diferencia no es cosmética: decide si
-la plataforma cabe holgada o al límite.
+Con cinco servicios más Kafka, Redis, Prometheus, Grafana y el sistema
+operativo sobre dos máquinas, esa diferencia no es cosmética: **decide si la
+plataforma cabe holgada o al límite**.
 
-### Qué aporta la reescritura, independientemente del lenguaje
+### 3.2 Lo que Go no aporta, y conviene no atribuirle
 
-Conviene atribuirlo donde corresponde. Los hallazgos de fondo —la regla
-inalcanzable, el `score` truncado, la pérdida silenciosa de eventos— **salieron
-de volver a razonar cada decisión**, y habrían salido igual reescribiendo en
-Java. Go no los encontró; reescribir sí.
+Un lenguaje no encuentra errores de diseño. Las decisiones que hacen correcto
+este sistema —evaluar la caída de velocidad sobre la lista completa, tratar la
+confianza como un número real, confirmar el offset después de procesar— salen
+de razonar el dominio, y se habrían tomado igual en cualquiera de las tres
+opciones.
 
-Presentarlos como mérito del lenguaje sería deshonesto, y se desarma en cuanto
+Atribuirle al lenguaje méritos que corresponden al diseño se desarma en cuanto
 alguien pregunte cómo exactamente.
 
-### El compromiso sobre la idempotencia del productor
+### 3.3 El compromiso sobre la idempotencia del productor
+
+Es la renuncia más seria de esta decisión y conviene decirla sin rodeos.
 
 La guía recomienda `enable.idempotence=true` en el productor.
 `segmentio/kafka-go` no lo implementa por completo; `confluent-kafka-go` sí,
 pero depende de librdkafka vía cgo, lo que elimina el binario estático y con él
 la imagen mínima, que es una de las razones de elegir Go.
 
-Se optó por `segmentio/kafka-go` con `acks=all` y **idempotencia en el
+Se optó por `segmentio/kafka-go` con `acks=all` e **idempotencia en el
 consumidor**: `SET NX` sobre el identificador de evento en el ingestor y el
 correlator, `ON CONFLICT DO NOTHING` en el persister. Es una garantía más
-robusta que la del productor, porque protege también contra reprocesos por
+amplia que la del productor, porque protege también contra reprocesos por
 rebalanceo o reinicio, no solo contra reintentos de escritura. El detalle está
 en [ADR-006](006-resiliencia-y-tolerancia-a-fallos.md).
 
-Es un compromiso real y hay que decirlo así: se renunció a una recomendación
-explícita de la guía a cambio de una propiedad de despliegue, y se compensó por
-otra vía.
+Aun así es un compromiso: se renunció a una recomendación explícita de la guía
+a cambio de una propiedad de despliegue, y se compensó por otra vía.
 
 ## 4. Consecuencias
 
 ### Positivas
 
-- Huella verificada un orden de magnitud menor, sobre hardware que no es
-  elástico.
+- Huella verificada un orden de magnitud menor que la alternativa, sobre
+  hardware que no es elástico.
 - Reinicios imperceptibles: un despliegue no interrumpe la ingesta.
 - Control explícito sobre lo que importa. Confirmar offsets manualmente es una
   línea de código, no una pelea contra la abstracción del framework.
 - Imágenes `distroless` sin intérprete de comandos ni gestor de paquetes, lo
-  que reduce la superficie de ataque y facilita el ADR de seguridad.
-- Menos dependencias directas: cinco librerías por servicio, todas justificables
-  una a una.
+  que reduce la superficie de ataque y sostiene el ADR de seguridad.
+- Menos dependencias directas: cinco bibliotecas por servicio, todas
+  justificables una a una.
 
 ### Negativas aceptadas
 
-- **Tiempo invertido en reescribir que no fue a la documentación.** Con la
-  evaluación pesando más en los ADR y el informe que en la implementación, es
-  el costo más serio de esta decisión.
+- **Tiempo invertido en escribir lo que un framework habría dado resuelto.**
+  Carga de configuración, middleware, registro de métricas: alrededor de
+  cuatrocientas líneas que hay que mantener.
 - **Curva de aprendizaje** con fecha fija. Se mitigó manteniendo el diseño
   deliberadamente simple: biblioteca estándar para HTTP, configuración y
   registros, sin framework.
-- **Se escribió a mano lo que Spring resolvía.** Carga de configuración,
-  middleware, registro de métricas: alrededor de cuatrocientas líneas que
-  antes no había que mantener.
 - **Sin productor idempotente**, según lo explicado arriba.
 - **El ecosistema obliga a elegir con cuidado.** La biblioteca de validación
   contra JSON Schema con soporte de *draft 2020-12* —el que exige el contrato
@@ -205,10 +194,10 @@ otra vía.
 
 ### Riesgo de continuidad
 
-Si el equipo que mantenga el sistema después sabe Java y no Go, esta decisión
-les impone un costo. Se mitiga con tres cosas: el código está comentado
-explicando el porqué de cada decisión no evidente, no usa framework alguno —de
-modo que lo que hay que entender es Go y no un ecosistema— y los contratos son
+Si el equipo que mantenga el sistema sabe Java y no Go, esta decisión le impone
+un costo. Se mitiga con tres cosas: el código está comentado explicando el
+porqué de cada decisión no evidente, no usa framework alguno —de modo que lo
+que hay que entender es el lenguaje y no un ecosistema— y los contratos son
 JSON Schema, independientes del lenguaje: reescribir un servicio en otro
 lenguaje no obliga a tocar los demás.
 
@@ -224,8 +213,8 @@ Medido el 21 de septiembre de 2026 sobre el sistema en ejecución.
 | correlator | 28.9 MB | 19.1 MB | 14 |
 | persister | 26.7 MB | 17.9 MB | 19 |
 
-Referencia: `eclipse-temurin:17-jre-alpine`, la imagen base del sistema Java,
-ocupa **257 MB sin incluir la aplicación**.
+Referencia de contraste: `eclipse-temurin:17-jre-alpine`, una imagen base
+habitual para servicios Java, ocupa **257 MB sin incluir la aplicación**.
 
 ### Arranque
 
@@ -256,30 +245,30 @@ del objetivo de 2 segundos**.
 
 ### Qué se decidió
 
-Reescribir los programas del sistema en un lenguaje de programación distinto,
-más liviano, en lugar de seguir corrigiendo los existentes.
+Construir los programas del sistema en un lenguaje de programación **liviano y
+autocontenido**, en lugar del más habitual en este tipo de sistemas.
 
 ### Por qué
 
-Los programas nuevos ocupan **alrededor de diez veces menos** espacio y memoria
-que los anteriores. Como el sistema va a funcionar en equipos comprados por la
-Municipalidad, y esos equipos no se pueden ampliar sobre la marcha, consumir
-menos significa que la misma inversión en hardware alcanza para más, o que
-alcanza con menos equipos.
+Los programas resultantes ocupan **alrededor de diez veces menos** espacio y
+memoria que los de la alternativa evaluada. Como el sistema va a funcionar en
+equipos comprados por la Municipalidad, y esos equipos no se pueden ampliar
+sobre la marcha, consumir menos significa que la misma inversión en hardware
+alcanza para más, o que alcanza con menos equipos.
 
-Además arrancan en milisegundos en vez de segundos, lo que hace que actualizar
-el sistema no interrumpa el servicio de forma perceptible.
+Además arrancan en milisegundos en lugar de segundos, lo que hace que
+actualizar el sistema no interrumpa el servicio de forma perceptible.
 
-Hay un segundo beneficio, y conviene atribuirlo con precisión: **rehacer los
-programas obligó a revisar cada decisión**, y ahí aparecieron varios defectos
-del sistema anterior —entre ellos una regla de detección de accidentes que
-nunca podía activarse. Ese beneficio viene de rehacerlos, no del lenguaje
-elegido; se habría obtenido igual rehaciéndolos en el lenguaje original.
+La tercera razón es de personal: la alternativa habitual requiere ajustes
+especializados de rendimiento que exigen una persona con esa formación. El
+equipo de sistemas de la Municipalidad es reducido, y esta opción no lo
+necesita.
 
 ### Qué costó
 
-**Tiempo.** Rehacer los programas consumió esfuerzo que podría haberse dedicado
-a otras partes del proyecto. Es la contrapartida honesta de esta decisión.
+**Tiempo.** Este lenguaje trae menos cosas resueltas de fábrica, de modo que
+hubo que escribir a mano piezas que la alternativa habría aportado. Es la
+contrapartida honesta de la decisión.
 
 También supone que quien mantenga el sistema en el futuro debe conocer este
 lenguaje. Se atenuó manteniendo los programas deliberadamente simples y
@@ -292,8 +281,8 @@ demás.
 | Riesgo | Probabilidad | Impacto | Cómo se atiende |
 |---|---|---|---|
 | El personal futuro no conoce el lenguaje | Media | Medio | Código documentado, sin framework, contratos independientes del lenguaje |
-| Herramientas menos maduras que las del lenguaje anterior | Baja | Bajo | Verificado en funcionamiento; las carencias se compensaron por otra vía |
-| El tiempo invertido reste a otros entregables | Alta | Medio | Riesgo materializado y asumido |
+| Herramientas menos maduras que las de la alternativa | Baja | Bajo | Verificado en funcionamiento; las carencias se compensaron por otra vía |
+| El tiempo invertido reste a otros entregables | Alta | Medio | Riesgo asumido de forma consciente |
 
 ---
 
@@ -305,5 +294,5 @@ demás.
   restricción que da peso a la huella.
 - [ADR-006](006-resiliencia-y-tolerancia-a-fallos.md) — idempotencia en el
   consumidor como compensación del productor no idempotente.
-- `../../Ciudad_Inteligente/` — sistema Java de referencia, conservado sin
-  modificar.
+- [ADR-010](010-contenerizacion-y-orquestacion.md) — el binario estático es lo
+  que permite la imagen mínima.

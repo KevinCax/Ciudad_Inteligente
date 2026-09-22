@@ -17,9 +17,9 @@ const (
 // Alert es la alerta correlacionada v1.0, contrato de salida hacia el topic
 // correlated.alerts y hacia la tabla alerts.
 //
-// Score es float64 y se persiste en una columna numeric. En el servicio Java
-// de referencia la entidad declaraba score como Integer y lo redondeaba, de
-// modo que 0.85, 0.90 y 0.95 se guardaban los tres como 1.
+// Score es float64 y se persiste en una columna numeric. Declararlo entero
+// parece inocuo y no lo es: al redondear, 0.85, 0.90 y 0.95 se guardarian los
+// tres como 1 y toda la gradacion de confianza se perderia al persistir.
 type Alert struct {
 	AlertID       string   `json:"alert_id"`
 	CorrelationID string   `json:"correlation_id,omitempty"`

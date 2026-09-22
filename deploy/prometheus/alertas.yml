@@ -22,11 +22,20 @@ groups:
     rules:
       - alert: SLOLatenciaDeteccionIncumplido
         # Proporcion de alertas generadas por encima del objetivo de 2 s.
+        #
+        # El selector del bucket es una expresion regular y no le="2" a
+        # proposito. Prometheus 3 normaliza las etiquetas le a su
+        # representacion canonica de coma flotante, de modo que el bucket que
+        # el correlator expone como le="2" se almacena como le="2.0". Con el
+        # selector literal esta regla no encontraba serie alguna y, por tanto,
+        # NO PODIA DISPARARSE NUNCA: el SLO quedaba declarado pero sin
+        # vigilancia. La expresion acepta ambas formas y funciona igual en
+        # Prometheus 2 y 3.
         expr: |
           (
             sum(rate(correlator_correlation_latency_seconds_count[30m]))
             -
-            sum(rate(correlator_correlation_latency_seconds_bucket{le="2"}[30m]))
+            sum(rate(correlator_correlation_latency_seconds_bucket{le=~"2(\\.0)?"}[30m]))
           )
           /
           sum(rate(correlator_correlation_latency_seconds_count[30m]))
@@ -87,7 +96,12 @@ groups:
             'redis_no_disponible', es infraestructura.
 
       - alert: DLQRecibiendoMensajes
-        expr: sum(rate(ingestor_dlq_publicados_total[15m])) + sum(rate(correlator_dlq_published_total[15m])) + sum(rate(persister_dlq_publicados_total[15m])) > 0
+        expr: |
+          sum(rate(ingestor_dlq_publicados_total[15m]))
+          + sum(rate(correlator_dlq_published_total[15m]))
+          + sum(rate(persister_dlq_publicados_total[15m]))
+          + sum(rate(indexer_dlq_publicados_total[15m]))
+          > 0
         for: 15m
         labels:
           severidad: aviso
@@ -146,16 +160,18 @@ groups:
             dependencias esta caida.
 
       - alert: ServicioCaido
-        expr: up{job=~"ingestor|correlator|persister"} == 0
+        expr: up{job=~"ingestor|correlator|persister|indexer|jobs"} == 0
         for: 2m
         labels:
           severidad: critica
         annotations:
           resumen: "El servicio {{ $labels.job }} no responde"
           accion: >-
-            Si el caido es 'persister', la deteccion continua y solo se retrasa
-            el archivo. Si es 'ingestor' o 'correlator', la ciudad ha dejado de
-            detectar incidentes: es la maxima prioridad.
+            Depende de cual sea. Si es 'ingestor' o 'correlator', la ciudad ha
+            dejado de detectar incidentes: maxima prioridad. Si es 'persister',
+            la deteccion continua y solo se retrasa el archivo. Si es 'indexer',
+            solo se retrasa la busqueda historica. Si es 'jobs', no pasa nada
+            hasta la proxima ventana nocturna.
 
   # =========================================================================
   # Salud interna del sistema
@@ -231,3 +247,65 @@ groups:
           accion: >-
             Analizar por regla y por zona. Puede justificar ajustar las ventanas
             temporales o los umbrales de velocidad.
+
+  # =========================================================================
+  # Tareas periodicas (ADR-009)
+  # =========================================================================
+  - name: tareas-periodicas
+    interval: 60s
+    rules:
+      - alert: TareaNocturnaNoSeEjecuto
+        # Alerta por AUSENCIA, que es el fallo dificil de detectar: una tarea
+        # que deja de correr no produce errores, simplemente no produce nada.
+        # Por eso se vigila la marca de tiempo del ultimo exito y no un
+        # contador, que al detenerse deja una serie plana indistinguible de un
+        # periodo sin trabajo.
+        expr: time() - jobs_ultimo_exito_timestamp_seconds > 129600
+        for: 30m
+        labels:
+          severidad: aviso
+        annotations:
+          resumen: "La tarea {{ $labels.tarea }} lleva mas de 36 horas sin completarse"
+          descripcion: >-
+            Las tareas corren una vez al dia. Mas de 36 horas sin un exito
+            significa que se perdio al menos una ejecucion. Si la tarea es
+            'retencion', el archivo esta conservando datos personales mas alla
+            de su plazo.
+          accion: >-
+            Revisar los registros del servicio jobs. Se puede relanzar a mano:
+            POST /tareas/{{ $labels.tarea }}/ejecutar
+
+      - alert: TareaNocturnaFallando
+        expr: increase(jobs_ejecuciones_total{resultado="fallo"}[2h]) > 0
+        for: 10m
+        labels:
+          severidad: aviso
+        annotations:
+          resumen: "La tarea {{ $labels.tarea }} fallo en su ultima ejecucion"
+          descripcion: >-
+            Un fallo libera el cerrojo diario, de modo que la tarea puede
+            reintentarse el mismo dia sin esperar a manana.
+          accion: >-
+            Revisar el error en los registros y relanzar cuando este resuelto.
+
+      - alert: RetencionSinEfecto
+        # Si la purga corre pero nunca afecta filas durante una semana, o la
+        # politica esta mal configurada o el historico aun no alcanza el plazo.
+        # En un sistema en produccion desde hace meses, lo primero es lo
+        # probable.
+        expr: |
+          increase(jobs_ejecuciones_total{tarea="retencion",resultado="exito"}[7d]) > 5
+          and
+          increase(jobs_filas_afectadas_total{tarea="retencion"}[7d]) == 0
+        for: 1h
+        labels:
+          severidad: info
+        annotations:
+          resumen: "La purga lleva una semana ejecutandose sin afectar ninguna fila"
+          descripcion: >-
+            Puede ser normal si el sistema es reciente y nada ha cumplido plazo
+            todavia. En un sistema con meses de historico, sugiere que los
+            plazos de retencion estan mal configurados.
+          accion: >-
+            Comparar RETENCION_DIAS_* con la antiguedad real del evento mas
+            viejo de la tabla events.

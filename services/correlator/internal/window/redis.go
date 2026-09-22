@@ -11,8 +11,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Prefijos de las claves. Se mantienen los del sistema Java para que ambos
-// puedan inspeccionarse con las mismas herramientas durante la migracion.
+// Prefijos de las claves. Llevan el proposito en el nombre para que un
+// SCAN sobre Redis sea legible sin consultar el codigo.
 const (
 	prefijoVisto     = "corr:seen:"
 	prefijoZona      = "corr:zone:"
@@ -94,10 +94,11 @@ func (r *Resumen) Momento() (time.Time, error) {
 // MarcarVisto registra el evento como procesado y devuelve true si es la
 // primera vez que se ve.
 //
-// Usa SET NX EX, que es una sola operacion atomica. El sistema Java hacia
-// hasKey seguido de set: entre ambas llamadas cabe otra instancia del
-// correlator procesando el mismo evento, de modo que la idempotencia se
-// rompia justo cuando mas hace falta, al escalar horizontalmente.
+// Usa SET NX EX, que es una sola operacion atomica. La alternativa evidente
+// —comprobar si la clave existe y despues escribirla— deja entre ambas
+// llamadas un hueco por el que cabe otra instancia procesando el mismo
+// evento: la idempotencia se romperia justo cuando mas hace falta, al escalar
+// horizontalmente.
 func (s *Store) MarcarVisto(ctx context.Context, eventID string) (bool, error) {
 	nuevo, err := s.rdb.SetNX(ctx, prefijoVisto+eventID, "1", s.ttlVisto).Result()
 	if err != nil {
@@ -111,7 +112,7 @@ func (s *Store) MarcarVisto(ctx context.Context, eventID string) (bool, error) {
 // La ventana es un sorted set cuyo score es el instante del evento en
 // milisegundos. Eso permite consultar un rango temporal con ZRANGEBYSCORE en
 // O(log n) y podar con ZREMRANGEBYSCORE, en lugar de leer y deserializar la
-// lista completa en cada evento como hacia el sistema Java.
+// lista completa en cada evento.
 //
 // Se usan milisegundos y no nanosegundos porque el score de Redis es un
 // float64: los nanosegundos actuales necesitan mas bits de los que caben en
@@ -130,10 +131,11 @@ func (s *Store) AgregarEvento(ctx context.Context, r *Resumen, momento time.Time
 	pipe.ZAdd(ctx, clave, redis.Z{Score: float64(momento.UnixMilli()), Member: crudo})
 	pipe.ZRemRangeByScore(ctx, clave, "-inf", fmt.Sprintf("(%d", limite))
 	// El EXPIRE es solo una red de seguridad para zonas que dejan de recibir
-	// eventos. La poda por score es lo que acota el tamano de verdad: en el
-	// sistema Java el EXPIRE se refrescaba en cada push, asi que una zona con
-	// trafico continuo tenia una lista que no expiraba nunca y crecia sin
-	// limite.
+	// eventos. La poda por score es lo que acota el tamano de verdad.
+	//
+	// Confiar el limite al EXPIRE seria un error: al refrescarse en cada
+	// insercion, una zona con trafico continuo tendria una ventana que no
+	// expira nunca y que crece sin limite.
 	pipe.Expire(ctx, clave, s.ttlVentana*2)
 
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -173,9 +175,9 @@ func (s *Store) TamanoVentana(ctx context.Context, zona string) (int64, error) {
 // se emitio una equivalente que sigue vigente.
 //
 // Sin esto, cada evento nuevo que cae en la ventana vuelve a disparar la misma
-// regla sobre la misma evidencia: en el sistema Java, cinco lecturas LPR
-// seguidas en una zona generaban varias alertas de exceso de velocidad casi
-// identicas, inflando la tabla y los dashboards.
+// regla sobre la misma evidencia: cinco lecturas LPR seguidas en una zona
+// generarian varias alertas de exceso de velocidad casi identicas, inflando la
+// tabla y los tableros hasta que el operador dejara de mirarlos.
 func (s *Store) ReservarAlerta(ctx context.Context, tipo, zona string) (bool, error) {
 	clave := fmt.Sprintf("%s%s:%s", prefijoSupresion, tipo, zona)
 	reservada, err := s.rdb.SetNX(ctx, clave, "1", s.ttlSupresion).Result()

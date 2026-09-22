@@ -71,9 +71,10 @@ func TestPosibleRoboConLPR(t *testing.T) {
 	}
 }
 
-// sensor.speed estaba en el contrato y en los simuladores, pero ninguna regla
-// del sistema Java lo consumia: entraba al sistema y no producia inferencia.
-// El enunciado describe la correlacion esperada justamente con ese sensor.
+// sensor.speed esta en el contrato y en los simuladores, y el enunciado
+// describe la correlacion esperada justamente con ese sensor. Si la regla
+// consultara solo las camaras LPR, seria una senal que entra al sistema, se
+// almacena y no produce ninguna inferencia.
 func TestPosibleRoboConSensorDeVelocidad(t *testing.T) {
 	v := ventana(
 		ev("e1", canonical.TypePanicButton, 0, map[string]any{"tipo_de_alerta": "panico"}),
@@ -134,13 +135,13 @@ func TestPanicoSoloEsCandidatoAFalsoPositivo(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// accident: la regla que en el sistema Java era inalcanzable
+// accident: la regla con el filtro que podria volverla inalcanzable
 // ---------------------------------------------------------------------------
 
-// En el sistema Java, la lista de LPR se filtraba a velocidad > 80 y despues
-// se buscaba sobre esa misma lista una caida por debajo de 40. Como todos los
-// elementos superaban 80, la condicion era imposible y la alerta nunca se
-// generaba, pese a estar documentada como funcional.
+// Filtrar la lista de LPR a velocidad > 80 y buscar despues sobre esa misma
+// lista una caida por debajo de 40 hace la condicion imposible: todos los
+// elementos superan 80. La regla quedaria escrita y nunca dispararia. Esta
+// prueba existe para que ese error no pueda reintroducirse.
 func TestAccidenteSeGenera(t *testing.T) {
 	v := ventana(
 		ev("e1", canonical.TypeCitizenReport, 0, map[string]any{"tipo_evento": "accidente"}),
@@ -149,16 +150,15 @@ func TestAccidenteSeGenera(t *testing.T) {
 
 	det := buscar(Evaluar(v, ConfigPorDefecto()), canonical.AlertAccident)
 	if det == nil {
-		t.Fatal("la alerta de accidente no se genero: es exactamente el bug del sistema Java")
+		t.Fatal("la alerta de accidente no se genero: el filtro previo la volvio inalcanzable")
 	}
 	if det.Score != 0.85 {
 		t.Errorf("sin caida de velocidad el score deberia ser 0.85, se obtuvo %v", det.Score)
 	}
 }
 
-// Reproduce el escenario del simulador send_events_forced_alerts.py: una
-// lectura a 90 km/h seguida de otra a 30. En el sistema Java la lectura de 30
-// se descartaba por el filtro previo y la caida nunca se detectaba.
+// Una lectura a 90 km/h seguida de otra a 30. Si un filtro previo descartara
+// la lectura de 30 por no ser "rapida", la caida no podria detectarse nunca.
 func TestAccidenteDetectaLaCaidaDeVelocidad(t *testing.T) {
 	v := ventana(
 		ev("e1", canonical.TypeCitizenReport, 0, map[string]any{"tipo_evento": "accidente"}),

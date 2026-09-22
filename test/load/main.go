@@ -1,9 +1,9 @@
 // Command load genera carga contra el ingestor y mide su comportamiento.
 //
 // Cubre el requisito del enunciado de evaluar la reaccion del sistema ante
-// eventos multiples simultaneos, incluyendo picos de carga (seccion 2.3). Los
-// simuladores Python del proyecto original enviaban a ritmo constante con
-// sleep entre lotes, asi que nunca ejercieron una rafaga.
+// eventos multiples simultaneos, incluyendo picos de carga (seccion 2.3). Por
+// eso no se limita a un ritmo constante: un generador que espera entre lotes
+// comprueba que el sistema funciona, pero nunca ejerce una rafaga.
 //
 // Solo usa la biblioteca estandar: no hace falta instalar k6, Artillery ni
 // Node para ejecutarlo.
@@ -13,6 +13,8 @@
 //	go run . -escenario rafaga
 //	go run . -escenario sostenido -rps 20 -duracion 60s
 //	go run . -escenario alertas
+//	go run . -escenario bulk
+//	go run . -escenario enunciado
 package main
 
 import (
@@ -28,6 +30,8 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -36,12 +40,15 @@ import (
 
 func main() {
 	var (
-		url       = flag.String("url", "http://localhost:8000", "URL base del ingestor")
-		apiKey    = flag.String("api-key", "", "valor de la cabecera X-API-Key")
-		escenario = flag.String("escenario", "sostenido", "sostenido | rafaga | alertas")
-		rps       = flag.Int("rps", 10, "eventos por segundo en el escenario sostenido")
-		duracion  = flag.Duration("duracion", 30*time.Second, "duracion del escenario sostenido")
-		conc      = flag.Int("concurrencia", 50, "peticiones simultaneas maximas")
+		url        = flag.String("url", "http://localhost:8000", "URL base del ingestor")
+		apiKey     = flag.String("api-key", "", "valor de la cabecera X-API-Key")
+		escenario  = flag.String("escenario", "sostenido", "sostenido | rafaga | alertas | bulk | enunciado")
+		rps        = flag.Int("rps", 10, "eventos por segundo en el escenario sostenido")
+		duracion   = flag.Duration("duracion", 30*time.Second, "duracion del escenario sostenido")
+		conc       = flag.Int("concurrencia", 50, "peticiones simultaneas maximas")
+		lote       = flag.Int("lote", 20, "eventos por lote en el escenario bulk")
+		correlador = flag.String("correlator", "http://localhost:8080", "URL base del correlator, para leer sus metricas")
+		espera     = flag.Duration("espera", 3*time.Minute, "cuanto esperar a que cierre la ventana en el escenario enunciado")
 	)
 	flag.Parse()
 
@@ -63,8 +70,14 @@ func main() {
 	case "alertas":
 		fmt.Printf("Escenarios de correlacion: uno por cada tipo de alerta\n\n")
 		res = gen.alertas(ctx)
+	case "bulk":
+		fmt.Printf("Endpoint de lotes: se comprueba que un evento invalido no invalide el lote\n\n")
+		res = gen.bulk(ctx, *lote)
+	case "enunciado":
+		fmt.Printf("Tabla 2.4 del enunciado: los dos renglones, uno positivo y uno negativo\n\n")
+		res = gen.enunciado(ctx, *correlador, *espera)
 	default:
-		log.Fatalf("escenario desconocido: %q (usa sostenido, rafaga o alertas)", *escenario)
+		log.Fatalf("escenario desconocido: %q (usa sostenido, rafaga, alertas, bulk o enunciado)", *escenario)
 	}
 
 	res.imprimir()
@@ -171,6 +184,514 @@ func (g *generador) alertas(ctx context.Context) *resultados {
 	fmt.Println()
 
 	return res
+}
+
+// enunciado reproduce literalmente la tabla 2.4 del enunciado del proyecto.
+//
+// Esa tabla tiene dos renglones y el segundo es el que casi nunca se prueba:
+//
+//	Zona 4,  22:05 | Placa XYZ123 | 85 km/h | alerta de robo en curso
+//	Zona 10, 17:22 | --           | --      | falso positivo, sin complementarios
+//
+// El primero comprueba que el motor de correlacion dispara. El segundo
+// comprueba algo mas dificil: que NO dispare, y que ademas deje constancia de
+// que hubo una senal suelta que nunca encontro companera. Sin ese registro,
+// una zona tranquila y una zona llena de senales incompletas son
+// indistinguibles, y la tasa de falsos positivos no se puede medir.
+func (g *generador) enunciado(ctx context.Context, correlator string, espera time.Duration) *resultados {
+	res := nuevosResultados()
+	fallos := 0
+
+	antes, err := g.leerMuestras(ctx, correlator)
+	if err != nil {
+		fmt.Printf("  no se pudieron leer las metricas del correlator: %v\n", err)
+		res.registrarError("metricas")
+		return res
+	}
+
+	// Una ventana con eventos previos puede completar la coincidencia que el
+	// renglon 2 necesita dejar a medias. Se avisa en lugar de dar un
+	// resultado enganoso.
+	if v := valorDe(antes, "correlator_window_events", etq("zone", zonaNegativa)); v > 0 {
+		fmt.Printf("  aviso: %s ya tiene %.0f eventos en su ventana de correlacion.\n", zonaNegativa, v)
+		fmt.Printf("         Conviene esperar a que expire (2 min) para que el renglon 2 sea limpio.\n\n")
+	}
+
+	// ----------------------------------------------------------- renglon 1
+	fmt.Printf("  Renglon 1 - %s, 22:05: panico + placa %s a %d km/h\n",
+		zonaPositiva, placaEnunciado, velocidadEnunciado)
+	fmt.Println("             esperado: alerta possible_robbery")
+
+	for _, ev := range secuenciaEnunciadoPositiva() {
+		g.enviar(ctx, ev, res)
+		time.Sleep(200 * time.Millisecond)
+	}
+	time.Sleep(3 * time.Second)
+
+	despues, err := g.leerMuestras(ctx, correlator)
+	if err != nil {
+		fmt.Printf("             no se pudieron leer las metricas: %v\n", err)
+		res.registrarError("metricas")
+		return res
+	}
+
+	emitidas := delta(antes, despues, "correlator_alerts_generated_total",
+		etq("type", "possible_robbery", "zone", zonaPositiva))
+	suprimidas := delta(antes, despues, "correlator_alerts_suppressed_total",
+		etq("type", "possible_robbery"))
+
+	switch {
+	case emitidas >= 1:
+		fmt.Printf("             -> alerta emitida  [OK]\n")
+	case suprimidas >= 1:
+		fmt.Printf("             -> suprimida: ya habia una equivalente vigente en la zona.\n")
+		fmt.Printf("                Es comportamiento correcto, pero no verifica el renglon.\n")
+		fmt.Printf("                Reintentar cuando expire ALERT_SUPPRESS_TTL.\n")
+	default:
+		fmt.Printf("             -> NO se emitio ninguna alerta  [FALLA]\n")
+		fallos++
+	}
+
+	// ----------------------------------------------------------- renglon 2
+	fmt.Printf("\n  Renglon 2 - %s, 17:22: boton de panico sin eventos complementarios\n", zonaNegativa)
+	fmt.Println("             esperado: ninguna alerta, y un candidato a falso positivo")
+
+	base, err := g.leerMuestras(ctx, correlator)
+	if err != nil {
+		res.registrarError("metricas")
+		return res
+	}
+
+	for _, ev := range secuenciaEnunciadoNegativa() {
+		g.enviar(ctx, ev, res)
+	}
+	time.Sleep(3 * time.Second)
+
+	tras, err := g.leerMuestras(ctx, correlator)
+	if err != nil {
+		res.registrarError("metricas")
+		return res
+	}
+
+	if n := delta(base, tras, "correlator_alerts_generated_total",
+		etq("type", "possible_robbery", "zone", zonaNegativa)); n > 0 {
+		fmt.Printf("             -> se emitieron %.0f alertas; deberia no emitirse ninguna  [FALLA]\n", n)
+		fmt.Printf("                Probablemente la ventana de %s no estaba limpia.\n", zonaNegativa)
+		fallos++
+	} else {
+		fmt.Println("             -> ninguna alerta emitida  [OK]")
+	}
+
+	if espera <= 0 {
+		fmt.Println("             -> falso positivo pendiente de confirmar (se omitio la espera)")
+		return g.cerrarEnunciado(res, fallos)
+	}
+
+	// El falso positivo no se confirma al instante: hace falta que la ventana
+	// de la regla se cierre (2 min) y que pase el barrido periodico (30 s).
+	fmt.Printf("             -> esperando a que cierre la ventana de correlacion (hasta %s)", espera)
+
+	limite := time.Now().Add(espera)
+	confirmado := false
+	for time.Now().Before(limite) {
+		select {
+		case <-ctx.Done():
+			fmt.Println()
+			return g.cerrarEnunciado(res, fallos)
+		case <-time.After(15 * time.Second):
+		}
+		fmt.Print(".")
+
+		ahora, err := g.leerMuestras(ctx, correlator)
+		if err != nil {
+			continue
+		}
+		if delta(base, ahora, "correlator_false_positive_candidates_total",
+			etq("rule", "possible_robbery", "zone", zonaNegativa)) >= 1 {
+			confirmado = true
+			break
+		}
+	}
+	fmt.Println()
+
+	if confirmado {
+		fmt.Println("             -> falso positivo confirmado y contabilizado  [OK]")
+	} else {
+		fmt.Println("             -> la ventana no se cerro dentro del tiempo de espera  [FALLA]")
+		fmt.Println("                Subir -espera, o revisar el barrido del correlator.")
+		fallos++
+	}
+
+	return g.cerrarEnunciado(res, fallos)
+}
+
+func (g *generador) cerrarEnunciado(res *resultados, fallos int) *resultados {
+	fmt.Println()
+	if fallos == 0 {
+		fmt.Println("  los dos renglones de la tabla del enunciado se comportan como dice")
+	} else {
+		fmt.Printf("  %d comprobaciones fallaron\n", fallos)
+		res.registrarError("correlacion_enunciado")
+	}
+	fmt.Println()
+	return res
+}
+
+// Valores tomados literalmente de la tabla 2.4 del enunciado.
+const (
+	zonaPositiva       = "zona_4"
+	zonaNegativa       = "zona_10"
+	placaEnunciado     = "XYZ123"
+	velocidadEnunciado = 85
+)
+
+func secuenciaEnunciadoPositiva() []map[string]any {
+	z := coordenadas(zonaPositiva)
+	return []map[string]any{
+		evento("panic.button", zonaPositiva, z.lat, z.lon, map[string]any{
+			"tipo_de_alerta":            "panico",
+			"identificador_dispositivo": "BTN-Z4-001",
+			"user_context":              "movil",
+		}),
+		evento("sensor.lpr", zonaPositiva, z.lat, z.lon, map[string]any{
+			"placa_vehicular":    placaEnunciado,
+			"velocidad_estimada": velocidadEnunciado,
+			"modelo_vehiculo":    "sedan",
+			"color_vehiculo":     "gris",
+		}),
+	}
+}
+
+// secuenciaEnunciadoNegativa es un solo evento a proposito: es justamente la
+// ausencia de complementarios lo que el renglon 2 comprueba.
+func secuenciaEnunciadoNegativa() []map[string]any {
+	z := coordenadas(zonaNegativa)
+	return []map[string]any{
+		evento("panic.button", zonaNegativa, z.lat, z.lon, map[string]any{
+			"tipo_de_alerta":            "panico",
+			"identificador_dispositivo": "BTN-Z10-001",
+			"user_context":              "movil",
+		}),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Lectura de metricas del correlator
+//
+// Se leen del endpoint /metrics y no de la API de alertas porque /metrics no
+// exige credenciales y porque los contadores permiten medir por diferencia,
+// que es lo unico fiable cuando el sistema lleva rato en marcha.
+// ---------------------------------------------------------------------------
+
+type muestra struct {
+	nombre    string
+	etiquetas map[string]string
+	valor     float64
+}
+
+func (g *generador) leerMuestras(ctx context.Context, base string) ([]muestra, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/metrics", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := g.http().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("%s/metrics devolvio %d", base, resp.StatusCode)
+	}
+
+	datos, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return parsearExposicion(string(datos)), nil
+}
+
+func parsearExposicion(texto string) []muestra {
+	var ms []muestra
+	for _, linea := range strings.Split(texto, "\n") {
+		linea = strings.TrimSpace(linea)
+		if linea == "" || strings.HasPrefix(linea, "#") {
+			continue
+		}
+		corte := strings.LastIndex(linea, " ")
+		if corte < 0 {
+			continue
+		}
+		valor, err := strconv.ParseFloat(linea[corte+1:], 64)
+		if err != nil {
+			continue
+		}
+
+		m := muestra{etiquetas: map[string]string{}}
+		izq := linea[:corte]
+		if i := strings.Index(izq, "{"); i >= 0 {
+			m.nombre = izq[:i]
+			for _, par := range strings.Split(strings.TrimSuffix(izq[i+1:], "}"), ",") {
+				if j := strings.Index(par, "="); j > 0 {
+					m.etiquetas[strings.TrimSpace(par[:j])] = strings.Trim(par[j+1:], `"`)
+				}
+			}
+		} else {
+			m.nombre = izq
+		}
+		m.valor = valor
+		ms = append(ms, m)
+	}
+	return ms
+}
+
+func etq(pares ...string) map[string]string {
+	m := map[string]string{}
+	for i := 0; i+1 < len(pares); i += 2 {
+		m[pares[i]] = pares[i+1]
+	}
+	return m
+}
+
+func valorDe(ms []muestra, nombre string, etiquetas map[string]string) float64 {
+	total := 0.0
+	for _, m := range ms {
+		if m.nombre != nombre {
+			continue
+		}
+		coincide := true
+		for k, v := range etiquetas {
+			if m.etiquetas[k] != v {
+				coincide = false
+				break
+			}
+		}
+		if coincide {
+			total += m.valor
+		}
+	}
+	return total
+}
+
+// delta mide por diferencia. Un contador acumulado no dice nada por si solo
+// cuando el sistema lleva horas en marcha: lo que importa es cuanto subio.
+func delta(antes, despues []muestra, nombre string, etiquetas map[string]string) float64 {
+	return valorDe(despues, nombre, etiquetas) - valorDe(antes, nombre, etiquetas)
+}
+
+// bulk ejercita POST /events/bulk.
+//
+// No mide volumen, comprueba el contrato. La promesa del endpoint es que un
+// evento invalido no invalide el lote entero y que la respuesta diga
+// exactamente cual fallo, en que indice y por que. Un generador que solo
+// enviara lotes sin mirar la respuesta dejaria esa promesa sin verificar
+// contra el sistema levantado.
+func (g *generador) bulk(ctx context.Context, tam int) *resultados {
+	res := nuevosResultados()
+
+	// Se repite a proposito dentro de un mismo lote: el segundo debe
+	// rechazarse por duplicado sin arrastrar a los demas.
+	repetido := eventoAleatorio()
+
+	casos := []struct {
+		nombre  string
+		eventos []map[string]any
+		espera  []string
+	}{
+		{
+			nombre:  fmt.Sprintf("lote limpio de %d eventos", tam),
+			eventos: loteValido(tam),
+			espera:  repetir("accepted", tam),
+		},
+		{
+			nombre: "lote mixto: validos e invalidos entremezclados",
+			eventos: []map[string]any{
+				eventoAleatorio(),
+				sinCampo(eventoAleatorio(), "severity"),
+				eventoAleatorio(),
+				conCampoExtra(eventoAleatorio()),
+				conTipoInvalido(eventoAleatorio()),
+				eventoAleatorio(),
+			},
+			espera: []string{
+				"accepted", "rejected_contract", "accepted",
+				"rejected_contract", "rejected_contract", "accepted",
+			},
+		},
+		{
+			nombre:  "duplicado dentro del mismo lote",
+			eventos: []map[string]any{repetido, eventoAleatorio(), repetido},
+			espera:  []string{"accepted", "accepted", "rejected_duplicate"},
+		},
+	}
+
+	fallos := 0
+	for _, c := range casos {
+		fmt.Printf("  %s\n", c.nombre)
+		r, err := g.enviarLote(ctx, c.eventos, res)
+		if err != nil {
+			fmt.Printf("      no se pudo enviar: %v\n", err)
+			fallos++
+			continue
+		}
+		fallos += comprobarLote(r, c.espera)
+	}
+
+	// Un cuerpo mal formado no es un lote con eventos invalidos: es una
+	// peticion invalida, y debe responder 400 y no 202.
+	fmt.Println("  cuerpo que no es un arreglo JSON")
+	if codigo := g.enviarCrudo(ctx, []byte(`{"event_type":"panic.button"}`), res); codigo != http.StatusBadRequest {
+		fmt.Printf("      esperaba 400, se obtuvo %d\n", codigo)
+		fallos++
+	} else {
+		fmt.Println("      400, como corresponde")
+	}
+
+	fmt.Println()
+	if fallos == 0 {
+		fmt.Println("  el endpoint se comporta como promete el contrato")
+	} else {
+		fmt.Printf("  %d comprobaciones fallaron\n", fallos)
+		res.registrarError("contrato_bulk")
+	}
+	fmt.Println()
+
+	return res
+}
+
+// respuestaBulk es la parte del cuerpo de /events/bulk que interesa aqui.
+type respuestaBulk struct {
+	Total      int `json:"total"`
+	Aceptados  int `json:"accepted"`
+	Rechazados int `json:"rejected"`
+	Resultados []struct {
+		Indice  int    `json:"index"`
+		Estado  string `json:"status"`
+		EventID string `json:"event_id"`
+		Mensaje string `json:"message"`
+	} `json:"results"`
+}
+
+// comprobarLote contrasta el resultado de cada indice con lo esperado y
+// devuelve cuantos no coincidieron.
+func comprobarLote(r *respuestaBulk, espera []string) int {
+	if len(r.Resultados) != len(espera) {
+		fmt.Printf("      el lote devolvio %d resultados, se esperaban %d\n",
+			len(r.Resultados), len(espera))
+		return len(espera)
+	}
+
+	fallos := 0
+	for i, quiero := range espera {
+		if tengo := r.Resultados[i].Estado; tengo != quiero {
+			fmt.Printf("      indice %d: esperaba %q, se obtuvo %q (%s)\n",
+				i, quiero, tengo, r.Resultados[i].Mensaje)
+			fallos++
+		}
+	}
+	if fallos == 0 {
+		fmt.Printf("      %d aceptados, %d rechazados, cada uno en su indice\n",
+			r.Aceptados, r.Rechazados)
+	}
+	return fallos
+}
+
+// enviarLote publica el lote y devuelve su respuesta ya interpretada.
+func (g *generador) enviarLote(ctx context.Context, eventos []map[string]any, res *resultados) (*respuestaBulk, error) {
+	cuerpo, err := json.Marshal(eventos)
+	if err != nil {
+		res.registrarError("serializacion")
+		return nil, err
+	}
+
+	datos, codigo, err := g.postLote(ctx, cuerpo, res)
+	if err != nil {
+		return nil, err
+	}
+	// Un lote con eventos invalidos sigue siendo un lote aceptado: el 202 es
+	// parte de la promesa, y un 400 aqui significaria que un elemento tumbo
+	// el lote entero.
+	if codigo != http.StatusAccepted {
+		return nil, fmt.Errorf("el lote devolvio %d, se esperaba 202", codigo)
+	}
+
+	var r respuestaBulk
+	if err := json.Unmarshal(datos, &r); err != nil {
+		return nil, fmt.Errorf("respuesta ilegible: %w", err)
+	}
+	return &r, nil
+}
+
+func (g *generador) enviarCrudo(ctx context.Context, cuerpo []byte, res *resultados) int {
+	_, codigo, _ := g.postLote(ctx, cuerpo, res)
+	return codigo
+}
+
+func (g *generador) postLote(ctx context.Context, cuerpo []byte, res *resultados) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.url+"/events/bulk", bytes.NewReader(cuerpo))
+	if err != nil {
+		res.registrarError("peticion")
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if g.apiKey != "" {
+		req.Header.Set("X-API-Key", g.apiKey)
+	}
+
+	inicio := time.Now()
+	resp, err := g.http().Do(req)
+	latencia := time.Since(inicio)
+	if err != nil {
+		res.registrarError("red")
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	datos, err := io.ReadAll(resp.Body)
+	if err != nil {
+		res.registrarError("lectura")
+		return nil, resp.StatusCode, err
+	}
+
+	res.registrar(resp.StatusCode, latencia)
+	return datos, resp.StatusCode, nil
+}
+
+func loteValido(n int) []map[string]any {
+	l := make([]map[string]any, n)
+	for i := range l {
+		l[i] = eventoAleatorio()
+	}
+	return l
+}
+
+func repetir(v string, n int) []string {
+	s := make([]string, n)
+	for i := range s {
+		s[i] = v
+	}
+	return s
+}
+
+// sinCampo quita un campo que el contrato declara obligatorio.
+func sinCampo(ev map[string]any, campo string) map[string]any {
+	delete(ev, campo)
+	return ev
+}
+
+// conCampoExtra anade un campo que el contrato no declara. El schema cierra el
+// objeto con additionalProperties:false, de modo que debe rechazarse en lugar
+// de ignorarse en silencio, que es lo que hace la mayoria de deserializadores.
+func conCampoExtra(ev map[string]any) map[string]any {
+	ev["campo_que_no_existe"] = "valor"
+	return ev
+}
+
+// conTipoInvalido pone un tipo de evento fuera del enumerado del contrato.
+func conTipoInvalido(ev map[string]any) map[string]any {
+	ev["event_type"] = "sensor.inexistente"
+	return ev
 }
 
 // aRitmo mantiene un ritmo de envio acotando la concurrencia.
@@ -507,9 +1028,9 @@ func secuenciaAccidente(zona string) []map[string]any {
 			"tipo_sonido_detectado": "vidrio_roto", "nivel_decibeles": 110,
 			"probabilidad_evento_critico": 0.9,
 		}),
-		// Las dos lecturas siguientes forman la caida de velocidad. En el
-		// sistema Java la segunda se descartaba por el filtro de velocidad
-		// previo, de modo que la caida no se detectaba nunca.
+		// Las dos lecturas siguientes forman la caida de velocidad. Si la
+		// regla filtrara antes por velocidad alta, la segunda desapareceria
+		// y la caida no podria detectarse nunca.
 		evento("sensor.lpr", zona, z.lat, z.lon, map[string]any{
 			"placa_vehicular": "P555AAA", "velocidad_estimada": 90,
 		}),

@@ -25,10 +25,9 @@ type Publisher struct {
 //   - Balancer Murmur2: kafka-go reparte por round-robin si no se indica otra
 //     cosa, ignorando por completo la clave del mensaje. Con el default, el
 //     partition_key no decidiria nada y se perderia la afinidad por zona en la
-//     que se apoya la correlacion. Murmur2 ademas reproduce el particionado
-//     del cliente Java, de modo que durante la migracion en paralelo una misma
-//     clave cae en la misma particion en ambos sistemas y las salidas son
-//     comparables.
+//     que se apoya la correlacion. Murmur2 es ademas el algoritmo estandar
+//     de particionado de Kafka, de modo que cualquier otro productor que
+//     escriba en el mismo topic reparte las claves igual.
 //
 //   - BatchTimeout bajo: el valor por defecto es 1 segundo, que en escrituras
 //     sincronas de un mensaje se traduce en hasta 1s de latencia por peticion.
@@ -74,10 +73,10 @@ func (p *Publisher) Close() error {
 
 // Publish escribe el evento y espera confirmacion de todas las replicas.
 //
-// Es sincrono a proposito. El servicio Java publicaba de forma asincrona y
-// respondia 202 sin esperar: si la publicacion fallaba, el cliente ya se habia
-// llevado un "aceptado", el evento quedaba solo en la base y el correlator
-// nunca lo veia. Aqui el 202 significa que Kafka confirmo.
+// Es sincrono a proposito. Publicar de forma asincrona y responder 202 sin
+// esperar seria mas rapido y mentiroso: si la publicacion fallara, el cliente
+// ya se habria llevado un "aceptado" por un evento que el correlator no vera
+// nunca. Aqui el 202 significa que Kafka confirmo.
 func (p *Publisher) Publish(ctx context.Context, clave string, valor []byte, cabeceras map[string]string) error {
 	msg := kafka.Message{
 		Key:     []byte(clave),
@@ -108,8 +107,8 @@ type MensajeDLQ struct {
 // PublishDLQ envia a la dead-letter queue lo que no se pudo procesar.
 //
 // El enunciado exige tratar explicitamente las colas de mensajes muertos
-// (seccion 4.2, resiliencia y tolerancia a fallos). El sistema Java descartaba
-// en silencio todo lo que fallaba.
+// (seccion 4.2, resiliencia y tolerancia a fallos). La alternativa —descartar
+// en silencio lo que falla— hace imposible saber despues que se perdio.
 func (p *Publisher) PublishDLQ(ctx context.Context, motivo string, detalle any, traceID string, original []byte) error {
 	cuerpo, err := json.Marshal(MensajeDLQ{
 		Servicio:  "ingestor",

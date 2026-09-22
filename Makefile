@@ -16,6 +16,7 @@ help:
 	@echo "  make fmt             Formatea el codigo de ambos servicios"
 	@echo "  make check           fmt + vet + test + check-contracts"
 	@echo "  make docker          Construye las imagenes de ambos servicios"
+	@echo "  make adr             Consolida los ADR en docs/ADR-consolidado.md"
 
 # --- Contratos -------------------------------------------------------------
 # El schema vive una sola vez en contracts/ y se copia a cada servicio, que lo
@@ -115,6 +116,10 @@ logs:
 config:
 	docker compose $(COMPOSE_EDGE) $(ENVFILE) config --quiet && echo "edge + dev: sintaxis correcta"
 	docker compose $(COMPOSE_CLOUD) $(ENVFILE) config --quiet && echo "cloud: sintaxis correcta"
+
+.PHONY: adr
+adr:
+	@python docs/consolidar-adr.py
 
 .PHONY: load
 load:

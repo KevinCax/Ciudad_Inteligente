@@ -31,9 +31,9 @@ var printer = message.NewPrinter(language.English)
 // (seccion 2.3, "validar en productor y nuevamente en consumidor"): el
 // correlator no confia en que el ingestor haya validado bien.
 //
-// Validar la alerta de salida es nuevo respecto al sistema Java, donde la
-// alerta no tenia contrato formal. Evita publicar en correlated.alerts
-// mensajes que los consumidores aguas abajo no puedan interpretar.
+// Tambien se valida la alerta de salida, no solo el evento de entrada: evita
+// publicar en correlated.alerts mensajes que los consumidores aguas abajo no
+// puedan interpretar.
 type Validator struct {
 	event *jsonschema.Schema
 	alert *jsonschema.Schema

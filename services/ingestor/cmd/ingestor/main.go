@@ -173,8 +173,9 @@ func run() error {
 
 // salud comprueba de verdad cada dependencia.
 //
-// El health del servicio Java devolvia "UP" con solo verificar que el
-// KafkaTemplate no fuera nil, asi que reportaba salud con Kafka caido.
+// Comprobar que el cliente existe no es comprobar que la dependencia
+// responde: un health asi devuelve "UP" con Kafka caido, que es peor que no
+// tenerlo, porque el orquestador nunca saca la instancia de rotacion.
 //
 // Ninguna de las dependencias que se comprueban aqui esta en la nube: el
 // ingestor depende solo de Redis y Kafka, ambos en la LAN municipal.

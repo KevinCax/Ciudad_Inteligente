@@ -4,7 +4,7 @@ Dos capas separadas, que es como se materializa el modelo híbrido.
 
 | Archivo | Capa | Contiene |
 |---|---|---|
-| `docker-compose.edge.yml` | On-premise (LAN municipal) | Kafka, Redis, ingestor, correlator, persister, indexer, Kafka-UI |
+| `docker-compose.edge.yml` | On-premise (LAN municipal) | Kafka, Redis, ingestor, correlator, persister, indexer, jobs, Kafka-UI |
 | `docker-compose.dev.yml` | Añadido de desarrollo | PostgreSQL local, en lugar de la base gestionada |
 | `docker-compose.cloud.yml` | Nube | Elasticsearch, Kibana, Grafana, Prometheus |
 
@@ -46,10 +46,11 @@ La red `ciudad_lan` la crea el compose de edge; el de nube se conecta a ella com
 | Correlator | http://localhost:8080 | `/alerts/active`, `/alerts/db`, `/health`, `/metrics` |
 | Persister | http://localhost:8002 | `/health`, `/metrics` |
 | Indexer | http://localhost:8003 | `/health`, `/metrics` |
+| Jobs | http://localhost:8004 | `/health`, `/metrics`, `/tareas` |
 | Kafka | localhost:9092 | Desde el host; dentro de Docker es `kafka:29092` |
 | Kafka-UI | http://localhost:8081 | Inspección de topics y mensajes |
 | PostgreSQL | localhost:5432 | Solo con `docker-compose.dev.yml` |
-| Grafana | http://localhost:3000 | Datasources provisionados automáticamente |
+| Grafana | http://localhost:3000 | Datasources **y tableros** provisionados automáticamente |
 | Prometheus | http://localhost:9090 | Recoge métricas de los tres servicios |
 | Elasticsearch | http://localhost:9200 | |
 | Kibana | http://localhost:5601 | |
@@ -70,7 +71,7 @@ Los crea `kafka-init` al arrancar, y termina.
 | `correlated.alerts` | 3 | 7 d | Alertas correlacionadas |
 | `events.dlq` | 3 | 14 d | Errores de validación y publicación |
 
-`events.dlq` no existía en el sistema Java: todo lo que fallaba se descartaba en silencio. Su retención es la más larga porque su propósito es justamente que alguien pueda revisar y reprocesar lo que falló.
+`events.dlq` es la red de seguridad: sin ella, todo lo que falla se descarta en silencio y no queda forma de saber después qué se perdió. Su retención es la más larga porque su propósito es justamente que alguien pueda revisar y reprocesar lo que falló.
 
 ## Prueba end-to-end
 
@@ -112,7 +113,7 @@ Verificar la alerta:
 curl -s "http://localhost:8080/alerts/active?zone=zona_10" | jq
 ```
 
-Debe aparecer una alerta `possible_robbery` con `score` **0.85** — no `1`, que es lo que guardaba el sistema Java al truncar el score a entero.
+Debe aparecer una alerta `possible_robbery` con `score` **0.85** — un número real, no un entero: la gradación de confianza entre 0.85, 0.90 y 0.95 es lo que distingue una regla de otra.
 
 Confirmar que la placa se tokenizó al persistir:
 
@@ -150,6 +151,24 @@ curl -s "http://localhost:9200/events-*/_search?q=event_type:sensor.lpr&size=1" 
 
 La placa debe aparecer tokenizada, igual que en PostgreSQL, y `geo` debe ser un objeto `{lat, lon}` apto para mapas.
 
+Comprobar las tareas periodicas:
+
+```bash
+curl -s http://localhost:8004/tareas | jq
+```
+
+Lanzar los agregados de hoy a mano, sin esperar a las 03:00:
+
+```bash
+curl -s -X POST "http://localhost:8004/tareas/agregados_diarios/ejecutar?dia=$(date -u +%F)" | jq
+```
+
+```bash
+docker exec ciudad-postgres psql -U ciudad -d ciudades -c "SELECT zone, type, alertas, round(score_promedio,2) FROM daily_alert_metrics WHERE dia = current_date ORDER BY alertas DESC LIMIT 5;"
+```
+
+Los agregados deben cuadrar con los datos crudos, y repetir la ejecucion no debe duplicar filas.
+
 Medir el SLO:
 
 ```bash
@@ -173,3 +192,31 @@ Añadir `-v` elimina también los volúmenes: borra los datos de Kafka, Redis y 
 El esquema de `sql/001_schema.sql` se aplica **solo la primera vez** que se inicializa el volumen de PostgreSQL. Para reaplicarlo hay que borrar el volumen con `down -v`.
 
 Las imágenes de los microservicios son `distroless`: no traen shell ni `curl`, de modo que el `healthcheck` a nivel de compose está deshabilitado a propósito. El estado se consulta por sus endpoints `/health`.
+
+## Tableros de Grafana
+
+Los tres tableros se provisionan solos al arrancar: no hay que importar nada a
+mano. Aparecen en la carpeta **Ciudad Inteligente**.
+
+| Tablero | Origen | Para qué sirve |
+|---|---|---|
+| Operación en tiempo real | Prometheus | Es el tablero de la demostración: ritmo de ingesta por tipo de sensor, alertas por tipo, rechazos, ventanas de correlación y estado de los cinco servicios |
+| Incidentes y mapa de calor | PostgreSQL | Mapa de calor georreferenciado, lista de incidentes y alertas críticas. Cubre los tres casos de visualización del enunciado |
+| SLO y presupuesto de error | Prometheus | Cumplimiento a 30 días, presupuesto consumido y percentiles de latencia con el umbral de 2 s marcado |
+
+Los orígenes de datos llevan **uid explícito** (`prometheus-ciudad`,
+`postgres-ciudad`, `elasticsearch-ciudad`). Sin él, Grafana generaría uno al
+azar en cada instalación y los tableros llegarían vacíos a la demostración.
+
+El JSON de los tableros se genera desde `deploy/grafana/dashboards.py`, no se
+edita a mano: un tablero mal formado no falla al arrancar, simplemente no
+aparece.
+
+### Si un panel sale vacío
+
+| Síntoma | Causa probable |
+|---|---|
+| Todos los paneles de un tablero, vacíos | El origen de datos no conecta. Revisar `deploy/.env` |
+| Solo los de PostgreSQL | La base está en la nube; comprobar `GRAFANA_PG_HOST` |
+| El mapa sin puntos | No hay eventos con coordenadas en el rango de tiempo elegido |
+| El SLO en blanco | Aún no se ha generado ninguna alerta: lanzar `./make.sh load alertas` |

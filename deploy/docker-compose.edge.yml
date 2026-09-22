@@ -146,7 +146,7 @@ services:
       KAFKA_TOPIC_EVENTS: events.standardized
       KAFKA_TOPIC_ALERTS: correlated.alerts
       KAFKA_TOPIC_DLQ: events.dlq
-      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-correlator-go}
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-correlator}
       KAFKA_CONSUME_FROM_START: ${KAFKA_CONSUME_FROM_START:-false}
       REDIS_ADDR: redis:6379
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es obligatoria}
@@ -184,7 +184,7 @@ services:
       KAFKA_BROKERS: kafka:29092
       KAFKA_TOPIC_EVENTS: events.standardized
       KAFKA_TOPIC_DLQ: events.dlq
-      KAFKA_CONSUMER_GROUP: ${PERSISTER_CONSUMER_GROUP:-persister-go}
+      KAFKA_CONSUMER_GROUP: ${PERSISTER_CONSUMER_GROUP:-persister}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es obligatoria}
       BATCH_SIZE: ${BATCH_SIZE:-100}
       BATCH_TIMEOUT: ${BATCH_TIMEOUT:-2s}
@@ -199,8 +199,9 @@ services:
 
   # El indexer, como el persister, esta sobre la frontera LAN -> nube: consume
   # de Kafka (LAN) y escribe en Elasticsearch (nube), tokenizando la placa
-  # antes de que el dato cruce. Sustituye al ETL horario del sistema Java: la
-  # busqueda queda al dia en segundos en lugar de en una hora (ADR-009).
+  # antes de que el dato cruce. Consume del broker en lugar de copiar por
+  # lotes desde la base, de modo que la busqueda queda al dia en segundos
+  # (ADR-009).
   #
   # Usa la MISMA llave HMAC que el persister: si difirieran, el mismo vehiculo
   # tendria seudonimos distintos en PostgreSQL y en Elasticsearch.
@@ -221,7 +222,7 @@ services:
       KAFKA_TOPIC_EVENTS: events.standardized
       KAFKA_TOPIC_ALERTS: correlated.alerts
       KAFKA_TOPIC_DLQ: events.dlq
-      KAFKA_CONSUMER_GROUP: ${INDEXER_CONSUMER_GROUP:-indexer-go}
+      KAFKA_CONSUMER_GROUP: ${INDEXER_CONSUMER_GROUP:-indexer}
       ELASTICSEARCH_URL: ${ELASTICSEARCH_URL:-http://elasticsearch:9200}
       BATCH_SIZE: ${BATCH_SIZE:-100}
       BATCH_TIMEOUT: ${BATCH_TIMEOUT:-2s}
@@ -285,9 +286,78 @@ services:
     networks: [ciudad_lan]
     restart: unless-stopped
 
+  # -------------------------------------------------------------------------
+  # Observabilidad
+  #
+  # Prometheus y Grafana viven en la LAN, no en la nube, por dos razones.
+  #
+  # La primera es de seguridad: raspar metricas exige que el recolector ABRA
+  # conexiones hacia cada servicio. Con Prometheus en la nube, eso serian
+  # conexiones nube -> LAN, es decir trafico de ENTRADA a la red municipal, que
+  # es justo lo que el modelo del ADR-001 excluye. Todo lo que cruza la
+  # frontera debe ser de salida.
+  #
+  # La segunda es de utilidad: si el enlace se cae, la deteccion sigue
+  # funcionando (ADR-001) y es precisamente entonces cuando hacen falta las
+  # metricas y las alertas. Un recolector al otro lado del enlace se queda
+  # ciego en el unico momento en que importa.
+  #
+  # Grafana los acompana porque consulta a Prometheus, y separarlos reintroduce
+  # el mismo trafico de entrada. Sus paneles de PostgreSQL y Elasticsearch si
+  # cruzan la frontera, pero como consultas puntuales de salida: durante un
+  # corte esos paneles quedan en blanco y los de tiempo real siguen vivos, que
+  # es la degradacion correcta.
+  # -------------------------------------------------------------------------
+
+  grafana:
+    image: grafana/grafana:12.4.1
+    container_name: ciudad-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # datasources.yml interpola estas variables leyendo el entorno del
+      # CONTENEDOR, no el .env de compose. Sin pasarlas aqui, Grafana provisiona
+      # la fuente de PostgreSQL con usuario y base vacios y el tablero de
+      # incidentes llega vacio a la demostracion sin un solo error visible.
+      GRAFANA_PG_HOST: ${GRAFANA_PG_HOST:-postgres:5432}
+      GRAFANA_PG_DATABASE: ${GRAFANA_PG_DATABASE:-ciudades}
+      GRAFANA_PG_USER: ${GRAFANA_PG_USER:-ciudad}
+      GRAFANA_PG_PASSWORD: ${GRAFANA_PG_PASSWORD:-ciudad}
+      GRAFANA_PG_SSLMODE: ${GRAFANA_PG_SSLMODE:-disable}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # Prometheus recoge las metricas de los cinco microservicios: es lo que
+  # sostiene el SLO.
+  #
+  # Version fija, no latest. Prometheus 3 cambio la normalizacion de las
+  # etiquetas le de los histogramas respecto de la serie 2, y un cambio de
+  # imagen silencioso puede dejar sin efecto las reglas del SLO. Para una
+  # demostracion evaluada en vivo, que la version sea reproducible importa mas
+  # que estar al dia.
+  prometheus:
+    image: prom/prometheus:v3.10.0
+    container_name: ciudad-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alertas.yml:/etc/prometheus/alertas.yml:ro
+      - prometheus-data:/prometheus
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   redis-data:
+  grafana-data:
+  prometheus-data:
 
 networks:
   ciudad_lan:

@@ -182,11 +182,10 @@ func (c *Client) Bulk(ctx context.Context, docs []Documento) (ResultadoBulk, err
 
 // AsegurarPlantilla crea o actualiza una plantilla de indice.
 //
-// Se aplica al arrancar y es idempotente. Tenerla en el codigo evita el paso
-// manual que exigia el sistema Java, donde cargar las plantillas era un comando
-// que alguien tenia que recordar ejecutar; si se olvidaba, Elasticsearch
-// deducia los tipos por su cuenta y las coordenadas dejaban de ser consultables
-// como geolocalizacion.
+// Se aplica al arrancar y es idempotente. Tenerla en el codigo evita que
+// cargar las plantillas sea un comando manual que alguien deba recordar: si se
+// olvidara, Elasticsearch deduciria los tipos por su cuenta y las coordenadas
+// dejarian de ser consultables como geolocalizacion.
 func (c *Client) AsegurarPlantilla(ctx context.Context, nombre string, plantilla []byte) error {
 	req, err := c.nuevaPeticion(ctx, http.MethodPut, "/_index_template/"+nombre, bytes.NewReader(plantilla))
 	if err != nil {

@@ -1,10 +1,11 @@
 // Command indexer indexa en Elasticsearch los eventos y alertas que circulan
 // por Kafka.
 //
-// Sustituye al ETL por lotes del sistema Java, que copiaba de PostgreSQL a
-// Elasticsearch una vez por hora: una busqueda podia no encontrar un incidente
-// ocurrido cincuenta minutos antes. Al consumir directamente del broker, la
-// busqueda queda al dia en segundos (ver ADR-009).
+// Consume directamente del broker en lugar de copiar por lotes desde
+// PostgreSQL cada cierto tiempo. La diferencia no es de elegancia: con una
+// copia horaria, una busqueda puede no encontrar un incidente ocurrido
+// cincuenta minutos antes. Asi la busqueda queda al dia en segundos
+// (ver ADR-009).
 //
 // Escribe fuera de la LAN, asi que —como el persister— esta sobre la frontera
 // de privacidad y tokeniza la placa vehicular antes de que el dato cruce

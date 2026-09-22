@@ -72,8 +72,8 @@ func (a *API) AlertasActivas(w http.ResponseWriter, r *http.Request) {
 
 // AlertasPersistidas atiende GET /alerts/db?zone=...&limit=...
 //
-// El endpoint equivalente del sistema Java hacia findAll() sin filtro ni tope
-// y devolvia la tabla completa en cada llamada.
+// El tope es obligatorio. Una consulta sin limite sobre una tabla que crece
+// sin cesar responde bien el primer mes y tumba el servicio al sexto.
 func (a *API) AlertasPersistidas(w http.ResponseWriter, r *http.Request) {
 	zona := strings.TrimSpace(r.URL.Query().Get("zone"))
 
@@ -147,8 +147,8 @@ func escribirError(w http.ResponseWriter, codigo int, mensaje, tipo string) {
 // ConAutenticacion exige un token Bearer en los endpoints de consulta.
 //
 // Las alertas revelan donde y cuando ocurren incidentes en la ciudad: es
-// informacion operativa de seguridad ciudadana, no un dato publico. En el
-// sistema Java estos endpoints estaban abiertos sin ninguna comprobacion.
+// informacion operativa de seguridad ciudadana, no un dato publico, y por eso
+// estos endpoints no pueden quedar abiertos.
 func ConAutenticacion(token string, log *slog.Logger, siguiente http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if token == "" {

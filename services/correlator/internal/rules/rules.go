@@ -2,8 +2,10 @@
 //
 // Las reglas son funciones puras sobre una foto de la ventana: no tocan Redis,
 // Kafka ni la base. Esa separacion es lo que permite probar cada regla con
-// eventos sinteticos y sin levantar infraestructura, que es como se detecto
-// que la regla de accidente del sistema Java era inalcanzable.
+// eventos sinteticos y sin levantar infraestructura. Esa facilidad para
+// probarlas es lo que permite detectar una regla inalcanzable: una cuyas
+// condiciones no puedan cumplirse a la vez y que, por tanto, nunca dispare
+// aunque este escrita y documentada.
 package rules
 
 import (
@@ -144,11 +146,11 @@ func Evaluar(v Ventana, cfg Config) Resultado {
 
 // reglaPosibleRobo: boton de panico mas un vehiculo huyendo a alta velocidad.
 //
-// A diferencia del sistema Java, acepta la senal de velocidad tanto de
-// sensor.lpr como de sensor.speed. El enunciado describe la correlacion
-// esperada con los tres sensores (boton de panico + lectura LPR + sensor de
-// velocidad), y sensor.speed estaba en el contrato y en los simuladores pero
-// ninguna regla lo consumia: entraba al sistema y no producia inferencia.
+// Acepta la senal de velocidad tanto de sensor.lpr como de sensor.speed. El
+// enunciado describe la correlacion esperada con los tres sensores (boton de
+// panico + lectura LPR + sensor de velocidad), de modo que consultar solo las
+// camaras dejaria sensor.speed como una senal que entra al sistema, se
+// almacena y no produce ninguna inferencia.
 func reglaPosibleRobo(v Ventana, cfg Config) (*Deteccion, *Parcial) {
 	desde := v.Ahora.Add(-cfg.VentanaRobo)
 
@@ -181,11 +183,11 @@ func reglaPosibleRobo(v Ventana, cfg Config) (*Deteccion, *Parcial) {
 
 // reglaAccidente: reporte ciudadano de accidente mas senal acustica.
 //
-// Aqui esta la correccion de fondo respecto al sistema Java. Alli la lista de
-// eventos LPR se filtraba primero a los de velocidad mayor que 80, y despues
-// se buscaba sobre esa misma lista una caida por debajo de 40. Como todos los
-// elementos superaban 80, la condicion no podia cumplirse nunca y la alerta de
-// accidente jamas se generaba, pese a estar documentada como funcional.
+// El orden de los filtros es lo delicado de esta regla, y la trampa es sutil.
+// Si la lista de lecturas LPR se filtrara primero a las de velocidad mayor que
+// 80 y despues se buscara sobre esa misma lista una caida por debajo de 40, la
+// condicion no podria cumplirse jamas: todos los elementos superarian 80. La
+// regla quedaria escrita, probada en apariencia y muerta en la practica.
 //
 // La correccion es conservar TODAS las lecturas de velocidad de la ventana,
 // ordenarlas por momento y buscar la transicion entre lecturas consecutivas.
@@ -294,8 +296,9 @@ func reglaExcesoVelocidad(v Ventana, cfg Config) (*Deteccion, *Parcial) {
 // detectarCaidaDeVelocidad busca una transicion brusca entre dos lecturas
 // consecutivas de velocidad en la ventana.
 //
-// Conserva todas las lecturas, no solo las rapidas: es justo el filtro previo
-// lo que hacia imposible la deteccion en el sistema Java.
+// Conserva todas las lecturas, no solo las rapidas. Filtrarlas antes de
+// buscar la transicion es justo lo que haria imposible detectarla: una caida
+// va de una lectura rapida a una lenta, y la lenta desaparece con el filtro.
 func detectarCaidaDeVelocidad(v Ventana, desde time.Time, cfg Config) (bool, []string) {
 	lecturas := todasLasLecturasDeVelocidad(v, desde)
 	if len(lecturas) < 2 {

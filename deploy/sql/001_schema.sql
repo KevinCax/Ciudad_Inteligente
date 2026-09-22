@@ -1,8 +1,8 @@
 -- Esquema de Ciudad Inteligente.
 --
--- Se mantiene la forma de las tablas del sistema Java para que ambos puedan
--- escribir sobre la misma base durante la migracion en paralelo y las salidas
--- sean comparables fila a fila.
+-- Dos tablas de detalle (events, alerts) y dos de agregados diarios. Los
+-- agregados no son una optimizacion: son lo que sobrevive cuando la politica
+-- de retencion borra el detalle (ADR-007).
 
 -- ---------------------------------------------------------------------------
 -- events: un registro por evento canonico ingerido
@@ -42,8 +42,8 @@ CREATE TABLE IF NOT EXISTS alerts (
   alert_id        uuid PRIMARY KEY,
   correlation_id  uuid,
   type            text NOT NULL,
-  -- numeric, no integer. La entidad Java declaraba score como Integer y lo
-  -- redondeaba, de modo que 0.85, 0.90 y 0.95 acababan los tres como 1.
+  -- numeric, no integer. Declararlo entero parece inocuo y no lo es: al
+  -- redondear, 0.85, 0.90 y 0.95 acabarian los tres como 1.
   score           numeric,
   zone            text,
   window_start    timestamptz,

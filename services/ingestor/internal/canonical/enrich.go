@@ -9,14 +9,13 @@ import (
 // Estrategias de asignacion de partition_key.
 const (
 	// PartitionByZone deriva la clave de geo.zone. Es la estrategia correcta
-	// segun Final-Project-Guide.md seccion 4 ("key = partition_key -> afinidad
+	// segun el enunciado del proyecto, seccion 4 ("key = partition_key -> afinidad
 	// por zona") y la que da sentido a la correlacion: todos los eventos de una
 	// misma zona caen en la misma particion y se ordenan entre si.
 	PartitionByZone = "zone"
 
-	// PartitionByEventType reproduce el comportamiento del servicio Java de
-	// referencia. Se conserva solo para poder correr ambos sistemas en paralelo
-	// durante la migracion y comparar salidas evento por evento.
+	// PartitionByEventType es la alternativa que se descarto. Se conserva
+	// configurable para poder demostrar el contraste y medir el desbalance.
 	//
 	// Es una mala clave de particion: solo existen 5 valores posibles para 3
 	// particiones, asi que el reparto queda desbalanceado y los eventos de una

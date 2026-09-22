@@ -14,21 +14,14 @@ Redis, persister— y cualquiera de ellos puede fallar. Hay que decidir
 **explícitamente qué ocurre con un evento cuando algo falla**, porque la
 alternativa no es que no pase nada: es que pase algo sin que nadie lo decida.
 
-El sistema Java de referencia ilustra el costo de no decidirlo. Su consumidor
-envolvía todo el procesamiento en un `try/catch` que imprimía el error y
-seguía:
+El modo de fallo por omisión es fácil de escribir y difícil de detectar:
+envolver todo el procesamiento en un manejador que registre el error y siga,
+con la confirmación de offsets en automático. El offset avanza igual, y
+**un evento que falle desaparece sin dejar rastro**: no queda en ninguna cola,
+no hay métrica que lo cuente y el productor ya recibió un `202`. Nadie puede
+saber después cuántos eventos se perdieron ni cuáles.
 
-```java
-} catch (Exception e) {
-    System.err.println("Evento inválido o error de procesamiento: " + e.getMessage());
-}
-```
-
-Como el `commit` de offsets era automático, el offset avanzaba igual. El
-resultado es que **un evento que fallara desaparecía sin dejar rastro**: no
-quedaba en ninguna cola, no había métrica que lo contara y el productor ya
-había recibido un `202`. Nadie podía saber después cuántos eventos se
-perdieron ni cuáles.
+Ese es el comportamiento que esta decisión existe para evitar.
 
 El enunciado lo pide como decisión documentada (sección 4.2): manejo de caídas
 del broker, colas de mensajes muertos, reintentos y **pérdida aceptable de
@@ -50,8 +43,8 @@ no fingir que es cero.
 
 ### Opción A — Descartar y continuar
 
-Lo que hacía el sistema Java: capturar la excepción, registrarla en consola y
-seguir con el siguiente mensaje.
+Capturar el error, registrarlo en consola y seguir con el siguiente mensaje.
+Es lo que ocurre por omisión si nadie decide otra cosa.
 
 **A favor**
 
@@ -141,8 +134,9 @@ evento sería tirar información recuperable.
 
 En el ingestor, que atiende peticiones HTTP, la misma clasificación decide el
 código de estado: `400` para lo permanente —corrige y reenvía— y `503` para lo
-transitorio —reintenta más tarde. El sistema Java respondía `400` a todo, de
-modo que el cliente no podía distinguir un caso del otro.
+transitorio —reintenta más tarde. Responder `400` a todo dejaría al cliente sin
+forma de distinguir un caso del otro, y reintentando lo que nunca va a
+funcionar o descartando lo que sí.
 
 ### 3.2 Confirmación manual de offsets
 
@@ -183,9 +177,10 @@ garantiza a su manera:
 | Correlator | `SET NX EX` sobre `corr:seen:{event_id}` | Ídem |
 | Persister | `INSERT ... ON CONFLICT DO NOTHING` | Lo resuelve la clave primaria |
 
-El sistema Java hacía `hasKey` seguido de `set`: entre ambas llamadas cabe otra
-instancia procesando el mismo evento, de modo que la idempotencia se rompía
-justo al escalar horizontalmente, que es cuando más hace falta.
+La forma intuitiva —comprobar si la clave existe y después escribirla— deja
+entre ambas llamadas un hueco por el que cabe otra instancia procesando el
+mismo evento: la idempotencia se rompería justo al escalar horizontalmente, que
+es cuando más hace falta.
 
 Esta propiedad es la que permite que el persister arranque por defecto desde el
 offset más antiguo: reprocesar un evento ya archivado solo suma un duplicado a
@@ -195,10 +190,10 @@ histórico. Ante la duda, prefiere releer de más.
 ### 3.5 Publicación confirmada
 
 El productor usa `acks=all` de forma **síncrona**: el `202` al cliente
-significa que Kafka confirmó la recepción en todas las réplicas. El sistema
-Java publicaba de forma asíncrona y respondía `202` sin esperar; si la
-publicación fallaba, el cliente ya se había llevado un "aceptado" y el evento
-no llegaba nunca al correlator.
+significa que Kafka confirmó la recepción en todas las réplicas. Publicar de
+forma asíncrona y responder `202` sin esperar sería más rápido y mentiroso: si
+la publicación fallara, el cliente ya se habría llevado un "aceptado" por un
+evento que no llegaría nunca al correlator.
 
 ### 3.6 Las rutas de limpieza no heredan la cancelación
 

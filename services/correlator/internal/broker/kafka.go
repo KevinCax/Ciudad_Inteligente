@@ -24,15 +24,14 @@ type OpcionesConsumer struct {
 	// DesdeElPrincipio decide si un grupo nuevo empieza por el offset mas
 	// antiguo disponible.
 	//
-	// Por defecto es false, es decir, se arranca desde el final. El sistema
-	// Java usaba auto-offset-reset=earliest con un TTL de idempotencia de 10
-	// minutos: al reiniciar, reprocesaba hasta 72 horas de eventos cuyas
-	// claves de deduplicacion ya habian expirado y regeneraba en masa alertas
-	// historicas, todas con created_at del momento del reinicio.
+	// Por defecto es false, es decir, se arranca desde el final, y la razon
+	// importa: el TTL de idempotencia es de 10 minutos, mucho menor que la
+	// retencion del topic. Leer desde el principio al reiniciar reprocesaria
+	// hasta 72 horas de eventos cuyas claves de deduplicacion ya expiraron, y
+	// regeneraria en masa alertas historicas, todas con la fecha de creacion
+	// del momento del reinicio.
 	//
-	// Conviene ponerlo en true solo para la migracion en paralelo, cuando se
-	// quiere que el correlator Go reprocese el mismo historico que el Java
-	// para comparar salidas.
+	// Se pone en true solo para reprocesar un historico a proposito.
 	DesdeElPrincipio bool
 }
 
@@ -55,8 +54,7 @@ func NewConsumer(o OpcionesConsumer) *Consumer {
 			// CommitInterval en cero desactiva el commit automatico: el
 			// offset se confirma explicitamente tras procesar el mensaje.
 			// Con commit automatico, un fallo de procesamiento deja el offset
-			// avanzado igual y el evento se pierde en silencio, que es lo que
-			// ocurria en el consumidor Java al tragarse toda excepcion.
+			// avanzado igual y el evento se pierde en silencio.
 			CommitInterval: 0,
 
 			MaxAttempts:    3,
@@ -198,9 +196,9 @@ type MensajeDLQ struct {
 
 // PublicarDLQ envia a la dead-letter queue lo que no se pudo procesar.
 //
-// El consumidor Java se limitaba a imprimir el error y seguir, asi que un
-// evento mal formado desaparecia sin rastro. Aqui queda el payload original
-// intacto para poder reprocesarlo, junto con su particion y offset.
+// Limitarse a registrar el error y seguir haria que un evento mal formado
+// desapareciera sin rastro. Aqui queda el payload original intacto para poder
+// reprocesarlo, junto con su particion y offset.
 func (p *Publisher) PublicarDLQ(ctx context.Context, motivo string, detalle any, m *Mensaje) error {
 	cuerpo, err := json.Marshal(MensajeDLQ{
 		Servicio:  "correlator",

@@ -40,10 +40,10 @@ func TestEventoValidoPasa(t *testing.T) {
 	}
 }
 
-// Esta es la diferencia de fondo con el servicio Java: alli se validaba el
-// objeto ya deserializado, de modo que Jackson descartaba los campos
-// desconocidos antes de validar y additionalProperties:false nunca detectaba
-// nada. Aqui se valida el JSON crudo, asi que si aplica.
+// Esta prueba defiende una decision facil de deshacer sin darse cuenta: se
+// valida el JSON *crudo*, no el struct ya deserializado. Al deserializar
+// primero, los campos desconocidos se descartan en silencio antes de llegar al
+// validador y additionalProperties:false no detecta nada.
 func TestCampoDesconocidoEsRechazado(t *testing.T) {
 	conExtra := strings.Replace(eventoValido,
 		`"severity": "critical",`,
@@ -148,7 +148,7 @@ func TestEstrategiaDeParticionado(t *testing.T) {
 		}
 	})
 
-	t.Run("por event_type (compatibilidad con el Java)", func(t *testing.T) {
+	t.Run("por event_type (la alternativa descartada)", func(t *testing.T) {
 		doc, _ := ParseDocument([]byte(base))
 		NewEnricher(PartitionByEventType).Enrich(doc)
 		if got := doc.(map[string]any)["partition_key"]; got != "sensor.lpr" {

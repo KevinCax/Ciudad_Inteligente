@@ -1,13 +1,17 @@
 # Datasources provisionados automaticamente.
 #
-# En el proyecto Java estos archivos solo existian como .example y estaban en
-# .gitignore, asi que cada quien tenia que configurarlos a mano y los
-# dashboards llegaban vacios a la demo. Aqui se versionan, y las credenciales
-# se inyectan por variable de entorno.
+# El uid es explicito a proposito: los tableros de dashboards/ referencian la
+# fuente por uid, y si Grafana lo generara al azar en cada instalacion los
+# paneles llegarian vacios a la demostracion.
+#
+# El archivo se versiona en lugar de dejarse como plantilla: si cada quien
+# tuviera que configurarlo a mano, los tableros llegarian vacios a la
+# demostracion. Las credenciales se inyectan por variable de entorno.
 apiVersion: 1
 
 datasources:
   - name: PostgreSQL-Ciudades
+    uid: postgres-ciudad
     type: postgres
     access: proxy
     url: ${GRAFANA_PG_HOST}
@@ -22,6 +26,7 @@ datasources:
     isDefault: true
 
   - name: Prometheus-Ciudades
+    uid: prometheus-ciudad
     type: prometheus
     access: proxy
     url: http://prometheus:9090
@@ -29,6 +34,7 @@ datasources:
       timeInterval: 10s
 
   - name: Elasticsearch-Ciudades
+    uid: elasticsearch-ciudad
     type: elasticsearch
     access: proxy
     url: http://elasticsearch:9200

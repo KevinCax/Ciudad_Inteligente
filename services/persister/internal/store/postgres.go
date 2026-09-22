@@ -230,10 +230,9 @@ type ResultadoLoteAlertas struct {
 
 // InsertarLoteAlertas escribe varias alertas en un solo viaje a la base.
 //
-// El score se guarda como float64 sobre la columna numeric. La entidad del
-// sistema Java lo declaraba Integer y lo redondeaba, de modo que 0.85, 0.90 y
-// 0.95 acababan los tres como 1 y los dashboards mostraban un dato que no
-// correspondia a ninguna de las reglas.
+// El score se guarda como float64 sobre la columna numeric. Declararlo entero
+// haria que 0.85, 0.90 y 0.95 acabaran los tres como 1, y los tableros
+// mostrarian un valor que no corresponde a ninguna de las reglas.
 func (s *Store) InsertarLoteAlertas(ctx context.Context, alertas []*canonical.Alert) (ResultadoLoteAlertas, error) {
 	var res ResultadoLoteAlertas
 	if len(alertas) == 0 {

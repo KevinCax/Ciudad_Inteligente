@@ -179,9 +179,9 @@ func (a *API) Schema(w http.ResponseWriter, r *http.Request) {
 
 // errorDePipeline traduce los errores del pipeline a codigos HTTP.
 //
-// Es la correccion del comportamiento del servicio Java, que respondia 400 a
-// todo: el cliente no podia distinguir un evento mal formado (no reintentar,
-// corregir) de una caida de Kafka (reintentar mas tarde).
+// Cada clase de fallo tiene su codigo. Responder 400 a todo dejaria al cliente
+// sin forma de distinguir un evento mal formado —que hay que corregir, no
+// reintentar— de una caida de Kafka, que hay que reintentar mas tarde.
 func (a *API) errorDePipeline(w http.ResponseWriter, ctx context.Context, err error, ev *canonical.Event) {
 	eventID := ""
 	if ev != nil {

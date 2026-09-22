@@ -50,9 +50,9 @@ func peticion(t *testing.T, api *API, cuerpo string) *httptest.ResponseRecorder 
 	return w
 }
 
-// El servicio Java respondia 400 a todo porque el controlador capturaba
-// Exception y devolvia badRequest. Cada clase de fallo debe tener su codigo:
-// el cliente necesita saber si corregir el evento o reintentar mas tarde.
+// Capturar toda excepcion en el controlador y devolver badRequest es comodo y
+// deja al cliente a ciegas. Cada clase de fallo debe tener su codigo: el
+// cliente necesita saber si corregir el evento o reintentar mas tarde.
 func TestMapeoDeErroresACodigosDeEstado(t *testing.T) {
 	casos := []struct {
 		nombre    string
@@ -192,8 +192,8 @@ func TestBulkRechazaCuerpoQueNoEsArreglo(t *testing.T) {
 }
 
 // El health debe responder 503 cuando una dependencia esta caida: si devuelve
-// 200 con Postgres inaccesible, el orquestador nunca saca la instancia de
-// rotacion. Es el fallo del health del servicio Java.
+// 200 con una dependencia inaccesible, el orquestador nunca saca la instancia
+// de rotacion y el fallo se prolonga indefinidamente.
 func TestHealthReflejaElEstadoDeLasDependencias(t *testing.T) {
 	casos := map[string]int{
 		"UP":       http.StatusOK,

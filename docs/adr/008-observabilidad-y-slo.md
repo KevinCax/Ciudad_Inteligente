@@ -18,17 +18,15 @@ Esa última frase es la que decide el contenido de este ADR. Un tablero solo
 avisa a quien lo está mirando. La pregunta no es qué se muestra, sino **qué
 pasa a las tres de la madrugada cuando nadie mira**.
 
-### El punto de partida: nada era medible
+### El punto de partida: qué significa "tener métricas"
 
-El sistema Java de referencia ilustra el problema. Su endpoint de métricas
-devolvía un literal:
+Exponer un endpoint `/metrics` es facilísimo y no significa nada por sí solo.
+El antipatrón es un endpoint que devuelve un literal:
 
-```java
-@GetMapping("/metrics")
-public String metrics() {
-    // agregar lógica real de métricas
-    return "{\"alerts\":0,\"events\":0}";
-}
+```
+GET /metrics
+    // pendiente: agregar la lógica real de métricas
+    return {"alerts": 0, "events": 0}
 ```
 
 Los registros eran `System.out.println` sin estructura, imposibles de filtrar o
@@ -44,8 +42,8 @@ porque un objetivo que no se puede medir no es un objetivo, es una intención.
 
 ### Opción A — Tableros de Grafana consultando la base de datos
 
-Lo que hacía el sistema Java: Grafana conectado a PostgreSQL, con consultas
-como `SELECT count(*) FROM alerts WHERE created_at > now() - interval '24 hours'`.
+Grafana conectado directamente a PostgreSQL, con consultas de agregación sobre
+la tabla de alertas filtradas por fecha.
 
 **A favor**
 
@@ -109,7 +107,7 @@ OpenTelemetry con un recolector y un backend de trazas.
 
 **En contra**
 
-- Complejidad operativa desproporcionada para tres servicios y un equipo
+- Complejidad operativa desproporcionada para cinco servicios y un equipo
   reducido.
 - Buena parte del beneficio se obtiene propagando el `trace_id` por registros y
   cabeceras de Kafka, que es mucho más barato.
@@ -155,9 +153,9 @@ solo dice que el evento se aceptó, no que se haya detectado nada.
 
 Aquí está el núcleo de lo que pide el enunciado.
 
-**Once reglas de alerta** en `deploy/prometheus/alertas.yml`, validadas con
-`promtool`, agrupadas en cuatro familias: latencia, integridad, disponibilidad
-y salud interna.
+**Catorce reglas de alerta** en `deploy/prometheus/alertas.yml`, validadas con
+`promtool`, agrupadas en cinco familias: latencia, integridad, disponibilidad,
+salud interna y tareas periodicas.
 
 Cada alerta lleva tres anotaciones: `resumen`, `descripcion` y —la que importa—
 **`accion`**, con el primer paso concreto de diagnóstico. El criterio es que
@@ -231,13 +229,41 @@ ingestor, se adjunta como cabecera del mensaje de Kafka y el correlator lo
 recupera y lo emite en sus propios registros.
 
 Resultado: un solo identificador permite reconstruir el recorrido completo de
-un evento a través de los tres servicios. Es el 80 % del valor de una
+un evento a través de los cinco servicios. Es el 80 % del valor de una
 trazabilidad distribuida al 5 % de su costo operativo.
 
-### 3.6 Dos propiedades de Prometheus que condicionan las reglas
+### 3.5.1 Dónde vive la observabilidad, y por qué no en la nube
 
-Ambas se observaron durante la verificación y afectan a cómo hay que escribir
-las reglas:
+Prometheus y Grafana corren **en la LAN municipal**, no en la capa de nube,
+pese a que la analítica es justamente lo que el
+[ADR-001](001-plataforma-de-despliegue.md) sitúa fuera. La excepción tiene dos
+razones y conviene dejarlas escritas, porque la ubicación intuitiva es la
+contraria.
+
+**La razón de seguridad.** Recolectar métricas no es que los servicios envíen
+datos: es que el recolector **abre conexiones hacia cada servicio**. Con
+Prometheus en la nube, esas serían conexiones de nube hacia la red municipal,
+es decir **tráfico de entrada**, que es precisamente lo que el modelo híbrido
+excluye. Todo lo que cruza la frontera debe ser de salida.
+
+**La razón de utilidad.** Si el enlace se cae, la detección sigue funcionando
+—esa es la propiedad central del ADR-001— y es justo entonces cuando hacen
+falta las métricas y las alertas. Un recolector al otro lado del enlace se
+queda ciego en el único momento en que importa.
+
+Grafana acompaña a Prometheus porque lo consulta, y separarlos reintroduciría
+el mismo tráfico de entrada. Sus paneles de PostgreSQL y Elasticsearch sí
+cruzan la frontera, pero como **consultas puntuales de salida**: durante un
+corte esos paneles quedan en blanco y los de tiempo real siguen vivos, que es
+exactamente la degradación que se quiere.
+
+El esquemático de `docs/diagramas/infraestructura.svg` lo muestra como nodo E,
+dentro del segmento LAN.
+
+### 3.6 Tres propiedades de Prometheus que condicionan las reglas
+
+Las tres se observaron durante la verificación y afectan a cómo hay que
+escribir las reglas:
 
 **Los contadores se reinician al reiniciar el proceso.** Se comprobó al
 reiniciar el correlator: sus métricas volvieron a cero. Por eso todas las
@@ -250,6 +276,36 @@ etiquetas. Una consulta como `correlator_alerts_generated_total` no devuelve
 cero antes de la primera alerta: **no devuelve nada**. Por eso la detección de
 ausencia de tráfico se hace sobre `ingestor_events_ingested_total`, que siempre
 tiene actividad en operación normal, y no sobre métricas que pueden no existir.
+
+**Prometheus 3 normaliza las etiquetas `le` de los histogramas.** Es la que más
+cara salió, porque no produce ningún error: produce silencio.
+
+El correlator publica su bucket como `le="2"`, tal como lo declara el código.
+Prometheus 3 lo almacena en su representación canónica de coma flotante, es
+decir `le="2.0"`. Un selector literal `{le="2"}` no encuentra serie alguna, de
+modo que la regla del SLO **no podía dispararse nunca**: el objetivo estaba
+declarado, documentado y sin vigilancia real.
+
+Se detectó porque el panel de cumplimiento del tablero llegaba vacío, no porque
+alguna comprobación fallara. `promtool check rules` valida la sintaxis y da
+`SUCCESS` igual, porque la expresión es correcta; lo que no existe es la serie.
+
+La corrección es usar una expresión regular que acepte ambas formas:
+
+```
+correlator_correlation_latency_seconds_bucket{le=~"2(\\.0)?"}
+```
+
+Funciona igual en Prometheus 2 y 3. Como consecuencia adicional, la imagen de
+Prometheus dejó de usar la etiqueta `latest` y pasó a versión fija: un cambio
+de versión silencioso puede dejar sin efecto una regla de SLO, y para una
+demostración evaluada en vivo la reproducibilidad vale más que estar al día.
+
+La lección general es la que más conviene retener: **una regla de alerta que
+no encuentra datos no se distingue de una regla que no tiene nada que
+reportar.** Ambas callan. Por eso la verificación no puede limitarse a validar
+la sintaxis; hay que comprobar que cada expresión devuelve serie contra un
+Prometheus con datos reales.
 
 ## 4. Consecuencias
 
@@ -320,8 +376,28 @@ alertas, 40 archivadas. Cero discrepancia.
 
 ```
 Checking alertas.yml
-  SUCCESS: 11 rules found
+  SUCCESS: 14 rules found
 ```
+
+Las catorce evalúan sin error contra el Prometheus en ejecución: ninguna quedó
+en estado `err` ni con expresión que no encuentre serie.
+
+### Tableros
+
+Tres tableros provisionados con **30 paneles**. Se comprobó enviando a sus
+respectivos motores el texto exacto de cada consulta generada:
+
+| Comprobación | Resultado |
+|---|---|
+| Expresiones PromQL de paneles y reglas | 45 comprobadas, 0 rechazadas |
+| Consultas SQL de los paneles | 11 comprobadas, 0 con error |
+| Orígenes de datos provisionados | Prometheus, PostgreSQL y Elasticsearch, los tres con conexión correcta |
+
+Esa comprobación encontró dos defectos que ninguna validación de sintaxis
+habría detectado: el selector de bucket descrito en el apartado 3.6, y unas
+credenciales de PostgreSQL que el archivo de despliegue no pasaba al contenedor
+de Grafana, de modo que el origen de datos se provisionaba con usuario y base
+vacíos.
 
 ## 6. Impacto en el negocio
 
@@ -344,7 +420,7 @@ minuto.
 
 ### Qué pasa cuando no se cumple
 
-Once reglas automáticas vigilan esos compromisos. Cada una lleva escrito el
+Catorce reglas automáticas vigilan esos compromisos. Cada una lleva escrito el
 primer paso a seguir, para que quien la reciba —incluso de madrugada— sepa por
 dónde empezar sin tener que averiguarlo.
 
@@ -391,5 +467,5 @@ que al principio se generen avisos que no correspondan a problemas reales.
   jerarquía de criticidad entre servicios.
 - [ADR-006](006-resiliencia-y-tolerancia-a-fallos.md) — la clasificación de
   fallos alimenta las métricas por motivo.
-- `deploy/prometheus/alertas.yml` — las once reglas.
+- `deploy/prometheus/alertas.yml` — las catorce reglas.
 - `services/*/internal/obs/obs.go` — instrumentación de cada servicio.

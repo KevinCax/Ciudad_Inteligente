@@ -160,18 +160,31 @@ sino **dónde**.
 ```
 Productor ──en claro──▶ Ingestor ──en claro──▶ Kafka (LAN) ──▶ Correlator
                                                    │
-                                                   ▼
-                                              Persister ──seudónimo──▶ PostgreSQL (nube)
+                                        ┌──────────┴──────────┐
+                                        ▼                     ▼
+                                   Persister              Indexer
+                                        │ seudónimo           │ seudónimo
+                                        ▼                     ▼
+                                  PostgreSQL            Elasticsearch
 ```
 
-El **persister** es el único componente que escribe fuera de la LAN
-([ADR-001](001-plataforma-de-despliegue.md)). Al situarse exactamente sobre la
-frontera, se convierte en el lugar natural —y único— donde aplicar la
-transformación.
+Solo **dos componentes escriben fuera de la LAN**: el persister y el indexer
+([ADR-001](001-plataforma-de-despliegue.md)). Ambos se sitúan exactamente sobre
+la frontera, y ambos aplican la misma transformación con **la misma llave**.
+
+Que la llave sea la misma no es un detalle de configuración: si difiriera, el
+mismo vehículo tendría seudónimos distintos en cada destino y las búsquedas
+cruzadas entre el archivo y el índice fallarían **en silencio**, devolviendo
+resultados incompletos sin dar ninguna señal de error. Se verificó sobre tres
+eventos que los tokens coinciden en ambos destinos.
 
 Eso da una propiedad valiosa: **para auditar que ningún dato personal sale del
-control municipal en claro, basta revisar un componente.** No hay que verificar
-cada ruta de salida del sistema, porque solo hay una.
+control municipal en claro, basta revisar dos componentes**, y ambos comparten
+el mismo paquete de tokenización. No hay que rastrear cada consulta del sistema
+buscando fugas.
+
+El servicio `jobs` también habla con la nube, pero solo para borrar y agregar:
+no escribe datos personales nuevos.
 
 Dentro de la LAN la placa circula en claro a propósito. El broker no sale de la
 red municipal, y la correlación necesita el valor original para agrupar
@@ -242,25 +255,29 @@ Es un compromiso consciente: sin seudónimo estable no hay correlación por
 vehículo, y sin correlación por vehículo la cámara de lectura de placas pierde
 su propósito.
 
-### 4.2 No hay política de retención implementada
+### 4.2 La retención está implementada, con un matiz
 
 El enunciado pregunta cómo se **protegen, anonimizan o retienen** los datos.
-Los dos primeros están resueltos; **la retención no está implementada**.
+Los tres están resueltos: la retención la aplica el servicio `jobs` cada noche
+(ver [ADR-009](009-orquestacion-de-tareas-periodicas.md)).
 
-Hoy el archivo histórico crece sin límite: entre sesenta y noventa gigabytes al
-mes según la estimación del [ADR-001](001-plataforma-de-despliegue.md). No hay
-proceso que purgue ni que degrade la precisión de los datos antiguos.
+La política degrada el dato conforme envejece, en lugar de conservarlo intacto
+para siempre o eliminarlo de golpe:
 
-Lo que debería implementarse, y queda propuesto:
+| Antigüedad | Placa | Coordenadas | Zona | Evento |
+|---|---|---|---|---|
+| 0 – 90 días | conservada | conservadas | conservada | conservado |
+| 90 días – 1 año | **eliminada** | conservadas | conservada | conservado |
+| 1 – 2 años | — | **eliminadas** | conservada | conservado |
+| Más de 2 años | — | — | — | **borrado**; queda el agregado diario |
 
-| Antigüedad | Tratamiento propuesto |
-|---|---|
-| 0 – 90 días | Completo, tal como se archiva hoy |
-| 90 días – 1 año | Eliminar el seudónimo de placa; conservar zona, sin coordenadas |
-| Más de 1 año | Solo agregados por zona y tipo de evento |
+En Elasticsearch la purga es más simple todavía: como el indexer crea un índice
+por mes, eliminar un periodo es borrar índices completos.
 
-Es trabajo pendiente, no una decisión tomada. Reconocerlo ahora es preferible a
-que aparezca como omisión en la defensa.
+**El matiz:** los plazos son configurables y los valores actuales son una
+propuesta técnica, no una decisión institucional. **La Municipalidad debe
+aprobarlos formalmente**, porque determinan durante cuánto tiempo conserva
+datos personales de ciudadanos y eso no es una decisión de ingeniería.
 
 ### 4.3 Sin control de acceso granular
 
@@ -359,10 +376,14 @@ protegida, el archivo permite reconstruir los desplazamientos de un vehículo
 —sin saber cuál— a lo largo del tiempo. Es información sensible y sigue
 sujeta a las obligaciones de protección de datos.
 
-**No hay todavía una política de borrado.** El archivo crece de forma
-indefinida. Se propone conservar el detalle completo tres meses, reducirlo
-después y quedarse solo con estadísticas pasado un año. **Está pendiente de
-decisión y de implementación.**
+**La política de borrado ya funciona.** Cada noche, un proceso automático
+elimina la información que superó su plazo: la identificación del vehículo a
+los tres meses, la ubicación exacta al año, y el registro completo a los dos
+años, conservando solo estadísticas.
+
+Los plazos son configurables y los actuales son una **propuesta técnica que la
+Municipalidad debe aprobar formalmente**, porque determinan cuánto tiempo se
+conservan datos personales de ciudadanos.
 
 ### Qué exige
 
@@ -370,8 +391,9 @@ decisión y de implementación.**
 |---|---|
 | Custodiar la clave de protección, con respaldo cifrado | Permanente |
 | Designar responsable de su resguardo | Una vez |
-| Definir y aprobar la política de borrado | Pendiente |
+| **Aprobar formalmente los plazos de borrado** | **Pendiente** |
 | Revisar quién tiene acceso al archivo | Semestral |
+| Comprobar que la purga nocturna se ejecutó | Mensual |
 
 ### Riesgo
 
@@ -380,7 +402,7 @@ decisión y de implementación.**
 | Pérdida de la clave | Baja | **Alto**: el archivo queda inservible para investigación | Respaldo cifrado con custodia separada |
 | Filtración de la clave | Baja | Alto: la protección deja de tener efecto | Nunca se versiona; rotación ante sospecha |
 | Reconstrucción de desplazamientos a partir de ubicación y hora | Media | Medio | **No mitigado.** Requiere reducir la precisión de las coordenadas en el archivo |
-| Crecimiento indefinido del archivo | Alta | Medio | Pendiente: política de retención |
+| Crecimiento indefinido del archivo | Baja | Medio | Resuelto: purga nocturna automática, verificada |
 
 ---
 

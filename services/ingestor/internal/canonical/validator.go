@@ -30,11 +30,11 @@ func SchemaJSON() []byte { return schemaJSON }
 
 // Validator valida documentos contra el evento canonico v1.0.
 //
-// A diferencia del servicio Java de referencia, aqui se valida el JSON *crudo*
-// del cliente y no el struct ya deserializado. Eso hace que la restriccion
-// "additionalProperties": false del contrato se aplique de verdad: al
+// Se valida el JSON *crudo* del cliente, no el struct ya deserializado, y el
+// orden importa mas de lo que parece: es lo que hace que la restriccion
+// "additionalProperties": false del contrato se aplique de verdad. Al
 // deserializar primero, los campos desconocidos se descartan silenciosamente
-// antes de llegar al validador y la restriccion nunca detecta nada.
+// antes de llegar al validador y la restriccion no detecta nada.
 type Validator struct {
 	schema *jsonschema.Schema
 }

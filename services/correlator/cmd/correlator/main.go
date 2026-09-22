@@ -56,6 +56,14 @@ func run() error {
 	reglas := rules.ConfigPorDefecto()
 	reglas.Version = cfg.RuleVersion
 
+	// Los umbrales del motor se pueden ajustar sin recompilar. Un valor sin
+	// sentido impide arrancar en lugar de producir un motor que no detecta
+	// nada o que alerta por todo, que son fallos silenciosos.
+	reglas, err = reglas.AplicarEntorno(cfg.ReglasDesdeEntorno)
+	if err != nil {
+		return err
+	}
+
 	log.Info("configuracion cargada",
 		slog.String("env", cfg.Env),
 		slog.String("puerto", cfg.Port),
@@ -64,6 +72,7 @@ func run() error {
 		slog.String("topic_salida", cfg.TopicAlerts),
 		slog.String("topic_dlq", cfg.TopicDLQ),
 		slog.String("consumer_group", cfg.ConsumerGroup),
+		slog.String("reglas", reglas.Resumen()),
 		slog.String("redis", cfg.RedisAddr),
 		slog.Duration("ttl_idempotencia", cfg.SeenTTL),
 		slog.Duration("ttl_ventana", cfg.WindowTTL),
@@ -206,9 +215,9 @@ func run() error {
 
 // consumir es el bucle principal: leer, procesar y confirmar.
 //
-// El offset se confirma despues de procesar, no antes. El consumidor Java
-// usaba commit automatico y se tragaba toda excepcion, de modo que un fallo de
-// procesamiento avanzaba el offset igual y el evento se perdia sin rastro.
+// El offset se confirma despues de procesar, no antes. Con confirmacion
+// automatica, un fallo de procesamiento avanzaria el offset igual y el evento
+// se perderia sin dejar rastro.
 func consumir(ctx context.Context, c *broker.Consumer, s *correlate.Service,
 	m *obs.Metrics, log *slog.Logger) error {
 

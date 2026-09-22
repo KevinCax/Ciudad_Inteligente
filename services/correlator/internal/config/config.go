@@ -23,11 +23,11 @@ type Config struct {
 	ConsumerGroup string
 
 	// ConsumeFromStart hace que un grupo nuevo lea desde el offset mas
-	// antiguo. Por defecto es false: el sistema Java usaba earliest con un
-	// TTL de idempotencia de 10 minutos, de modo que cada reinicio reprocesaba
-	// horas de eventos y regeneraba alertas historicas en masa. Se activa solo
-	// para la migracion en paralelo, cuando se quiere comparar salidas sobre
-	// el mismo historico.
+	// antiguo. Por defecto es false: como el TTL de idempotencia es de 10
+	// minutos y la retencion del topic de 72 horas, leer desde el principio
+	// en cada reinicio reprocesaria horas de eventos ya deduplicados y
+	// regeneraria alertas historicas en masa. Se activa solo para reprocesar
+	// un historico a proposito.
 	ConsumeFromStart bool
 
 	// Redis (ventanas de correlacion e idempotencia)
@@ -37,6 +37,15 @@ type Config struct {
 
 	// PostgreSQL
 	DatabaseURL string
+
+	// ReglasDesdeEntorno son los umbrales del motor de correlacion que el
+	// operador puede ajustar sin recompilar. Solo contiene los valores que
+	// el entorno define; el resto se queda en su valor por defecto.
+	//
+	// Existe porque el comentario del motor prometia ajustabilidad y nadie
+	// la habia cableado: main.go usaba los valores por defecto y ninguna
+	// variable de entorno los tocaba.
+	ReglasDesdeEntorno map[string]string
 
 	// Correlacion
 	SeenTTL          time.Duration
@@ -72,6 +81,8 @@ func Load() (*Config, error) {
 
 		DatabaseURL: env("DATABASE_URL", ""),
 
+		ReglasDesdeEntorno: reglasDesdeEntorno(),
+
 		SeenTTL:          envDuration("CORRELATION_SEEN_TTL", 10*time.Minute),
 		WindowTTL:        envDuration("CORRELATION_WINDOW_TTL", 10*time.Minute),
 		AlertSuppressTTL: envDuration("ALERT_SUPPRESS_TTL", 5*time.Minute),
@@ -98,8 +109,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("faltan variables de entorno obligatorias: %s", strings.Join(missing, ", "))
 	}
 
-	// El group id distingue el consumidor Go del consumidor Java durante la
-	// migracion en paralelo: ambos leen el mismo topic sin robarse offsets.
+	// El grupo de consumo no puede quedar vacio: dos despliegues que
+	// compartan grupo se reparten las particiones en lugar de leer cada uno
+	// el flujo completo, y eso no se manifiesta como error sino como eventos
+	// que simplemente no llegan.
 	if c.ConsumerGroup == "" {
 		return nil, fmt.Errorf("KAFKA_CONSUMER_GROUP no puede estar vacio")
 	}
@@ -109,6 +122,34 @@ func Load() (*Config, error) {
 
 // AuthEnabled indica si la API de gestion exige token.
 func (c *Config) AuthEnabled() bool { return c.APIToken != "" }
+
+// reglasDesdeEntorno recoge las variables que ajustan el motor de reglas.
+//
+// Se devuelven como texto sin interpretar para que el paquete rules —que es
+// quien conoce el significado de cada umbral— haga la conversion y valide los
+// rangos. Config no deberia saber que una ventana se mide en minutos ni que
+// una velocidad va en kilometros por hora.
+func reglasDesdeEntorno() map[string]string {
+	claves := []string{
+		"RULE_VENTANA_ROBO",
+		"RULE_VENTANA_ACCIDENTE",
+		"RULE_VENTANA_INCENDIO",
+		"RULE_VENTANA_VELOCIDAD",
+		"RULE_UMBRAL_VELOCIDAD",
+		"RULE_MIN_LPR_VELOCIDAD",
+		"RULE_CAIDA_DESDE",
+		"RULE_CAIDA_HASTA",
+		"RULE_UMBRAL_DECIBELES",
+		"RULE_ACCIDENTE_EXIGE_CAIDA",
+	}
+	m := map[string]string{}
+	for _, k := range claves {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			m[k] = v
+		}
+	}
+	return m
+}
 
 func env(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {

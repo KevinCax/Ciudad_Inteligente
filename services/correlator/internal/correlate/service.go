@@ -75,9 +75,9 @@ func (s *Service) Procesar(ctx context.Context, m *broker.Mensaje) error {
 		return nil
 	}
 
-	// Idempotencia atomica: SET NX en una sola operacion. El sistema Java
-	// hacia hasKey seguido de set, dejando una ventana de carrera por la que
-	// dos instancias podian procesar el mismo evento.
+	// Idempotencia atomica: SET NX en una sola operacion. Comprobar y despues
+	// escribir dejaria una ventana de carrera por la que dos instancias
+	// podrian procesar el mismo evento.
 	nuevo, err := s.ventanas.MarcarVisto(ctx, ev.EventID)
 	if err != nil {
 		return err // Redis caido: conviene reintentar
@@ -149,8 +149,8 @@ func (s *Service) emitir(ctx context.Context, det rules.Deteccion, ev *canonical
 
 	// Supresion: si ya hay una alerta equivalente vigente en la zona, no se
 	// emite otra. Sin esto, cada evento nuevo de la ventana vuelve a disparar
-	// la misma regla sobre la misma evidencia, que es lo que inflaba la tabla
-	// de alertas en el sistema Java.
+	// la misma regla sobre la misma evidencia, y un solo incidente en curso
+	// llena la tabla de alertas casi identicas.
 	zona := det.Zona
 
 	reservada, err := s.ventanas.ReservarAlerta(ctx, det.Tipo, zona)
@@ -175,9 +175,9 @@ func (s *Service) emitir(ctx context.Context, det rules.Deteccion, ev *canonical
 		s.reglas.Version,
 	)
 
-	// Validar la salida antes de publicarla: en el sistema Java la alerta no
-	// tenia contrato formal y cualquier cambio de forma llegaba sin control a
-	// los consumidores aguas abajo.
+	// Validar la salida antes de publicarla. Sin un contrato formal para la
+	// alerta, cualquier cambio de forma llegaria sin control a los
+	// consumidores aguas abajo y se descubriria alli, no aqui.
 	if err := s.validador.ValidateAlert(alerta); err != nil {
 		s.metrics.EventsSkipped.WithLabelValues("alerta_invalida").Inc()
 		log.Error("la alerta generada no cumple su contrato",

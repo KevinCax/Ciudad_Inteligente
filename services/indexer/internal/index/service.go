@@ -1,10 +1,10 @@
 // Package index transforma eventos y alertas en documentos de Elasticsearch.
 //
 // El indexer consume de Kafka igual que el persister, pero escribe en
-// Elasticsearch en lugar de PostgreSQL. Sustituye al ETL por lotes del sistema
-// Java, que copiaba de PostgreSQL a Elasticsearch una vez por hora: una
-// busqueda podia no encontrar un incidente ocurrido cincuenta minutos antes
-// (ver ADR-009).
+// Elasticsearch en lugar de PostgreSQL. Consumir del broker en lugar de copiar
+// por lotes desde la base es lo que mantiene la busqueda al dia: con una copia
+// horaria, una busqueda puede no encontrar un incidente ocurrido cincuenta
+// minutos antes (ver ADR-009).
 //
 // Al escribir fuera de la LAN, este servicio esta —como el persister— sobre la
 // frontera de privacidad, de modo que tambien tokeniza la placa vehicular antes
@@ -79,8 +79,9 @@ func (s *Service) IndexarEventos(ctx context.Context, mensajes []*broker.Mensaje
 		origen[ev.EventID] = m
 
 		// Distancia entre el momento del evento y su disponibilidad para
-		// busqueda. Es la metrica que cuantifica la mejora sobre el ETL
-		// horario del sistema Java, donde este valor se acercaba a una hora.
+		// busqueda. Es la metrica que justifica consumir del broker: con una
+		// copia periodica desde la base, este valor seria del orden del
+		// intervalo de la copia.
 		s.metrics.RetrasoIndice.Observe(time.Since(momento).Seconds())
 	}
 
@@ -184,9 +185,8 @@ func (s *Service) enviar(ctx context.Context, flujo string, docs []esearch.Docum
 //
 //   - geo pasa de {zone, lat, lon} a un geo_point {lat, lon}, con la zona
 //     promovida a campo propio. Elasticsearch exige esa forma para poder
-//     filtrar por distancia y dibujar mapas de calor; el ETL del sistema Java
-//     enviaba el objeto completo y el campo quedaba inutilizable como
-//     geolocalizacion.
+//     filtrar por distancia y dibujar mapas de calor; enviando el objeto
+//     completo, el campo queda inutilizable como geolocalizacion.
 //   - la placa vehicular se sustituye por su seudonimo antes de cruzar hacia
 //     la nube.
 func documentoDeEvento(ev *canonical.Event, tok *privacy.Tokenizador) map[string]any {

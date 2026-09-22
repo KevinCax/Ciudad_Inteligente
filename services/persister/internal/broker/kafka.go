@@ -52,8 +52,7 @@ func NewConsumer(o OpcionesConsumer) *Consumer {
 			// CommitInterval en cero desactiva el commit automatico: el
 			// offset se confirma explicitamente tras procesar el mensaje.
 			// Con commit automatico, un fallo de procesamiento deja el offset
-			// avanzado igual y el evento se pierde en silencio, que es lo que
-			// ocurria en el consumidor Java al tragarse toda excepcion.
+			// avanzado igual y el evento se pierde en silencio.
 			CommitInterval: 0,
 
 			MaxAttempts:    3,
@@ -178,8 +177,8 @@ type MensajeDLQ struct {
 // PublicarDLQ envia a la dead-letter queue lo que no se pudo archivar.
 //
 // Un evento que no llega a la base no existe para los informes ni para una
-// investigacion posterior. Descartarlo en silencio, como hacia el sistema
-// Java, deja un hueco en el archivo que nadie puede detectar despues.
+// investigacion posterior. Descartarlo en silencio dejaria un hueco en el
+// archivo que nadie puede detectar despues.
 func (p *Publisher) PublicarDLQ(ctx context.Context, motivo string, detalle any, m *Mensaje) error {
 	cuerpo, err := json.Marshal(MensajeDLQ{
 		Servicio:  "persister",

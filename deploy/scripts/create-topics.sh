@@ -26,9 +26,9 @@ crear "events.standardized" 3 259200000 "eventos canonicos, retencion 72h"
 # historico y los dashboards.
 crear "correlated.alerts" 3 604800000 "alertas correlacionadas, retencion 7d"
 
-# Dead-letter queue. El sistema Java no la tenia: todo lo que fallaba se
-# descartaba en silencio. Retencion larga porque su proposito es que alguien
-# pueda revisar y reprocesar lo que fallo.
+# Dead-letter queue. Sin ella, todo lo que falla se descarta en silencio y no
+# hay forma de saber despues que se perdio. Retencion larga porque su proposito
+# es que alguien pueda revisar y reprocesar lo que fallo.
 crear "events.dlq" 3 1209600000 "errores de validacion y publicacion, retencion 14d"
 
 echo ""

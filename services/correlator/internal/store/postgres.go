@@ -70,8 +70,9 @@ type AlertaPersistida struct {
 
 // AlertasPorZona consulta las alertas persistidas, opcionalmente filtradas.
 //
-// El limite es obligatorio: el endpoint equivalente del sistema Java hacia
-// findAll() sin filtro ni tope y devolvia la tabla entera en cada llamada.
+// El limite es obligatorio y se acota aqui, no solo en el handler: una
+// consulta sin tope sobre una tabla que crece sin cesar responde bien el
+// primer mes y agota la memoria del proceso al sexto.
 func (s *Store) AlertasPorZona(ctx context.Context, zona string, limite int) ([]AlertaPersistida, error) {
 	if limite <= 0 || limite > 500 {
 		limite = 100

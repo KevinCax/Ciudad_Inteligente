@@ -26,18 +26,38 @@ defender.
 | ADR | Decisión | Estado |
 |---|---|---|
 | [001](001-plataforma-de-despliegue.md) | Plataforma de despliegue: híbrido LAN + nube | Aceptado |
-| [002](002-lenguaje-y-runtime.md) | Lenguaje y runtime: Go sobre Java/Spring Boot | Aceptado |
-| 003 | Organización del repositorio: monorepo con módulos independientes | Pendiente |
-| 004 | Broker de eventos: Kafka en modo KRaft | Pendiente |
-| 005 | Persistencia: relacional frente a series de tiempo | Pendiente |
+| [002](002-lenguaje-y-runtime.md) | Lenguaje y runtime: Go | Aceptado |
+| [003](003-organizacion-del-repositorio.md) | Organización del repositorio: monorepo con módulos independientes | Aceptado |
+| [004](004-broker-de-eventos.md) | Broker de eventos: Kafka en modo KRaft | Aceptado |
+| [005](005-persistencia.md) | Persistencia: PostgreSQL relacional + Elasticsearch | Aceptado |
 | [006](006-resiliencia-y-tolerancia-a-fallos.md) | Resiliencia: DLQ, confirmación manual de offsets y pérdida aceptable | Aceptado |
 | [007](007-privacidad-y-datos-personales.md) | Privacidad: seudonimización de placas en la frontera LAN–nube | Aceptado |
 | [008](008-observabilidad-y-slo.md) | Observabilidad y objetivos de nivel de servicio | Aceptado |
 | [009](009-orquestacion-de-tareas-periodicas.md) | Orquestación de tareas periódicas: retirar Airflow | Aceptado |
+| [010](010-contenerizacion-y-orquestacion.md) | Contenerización y orquestación: Docker Compose, sin Kubernetes | Aceptado |
 
 El enunciado exige un mínimo de seis, incluido obligatoriamente el de
-plataforma de despliegue. **Hay seis aceptados.**
+plataforma de despliegue. **Hay diez aceptados.**
 
-Los tres pendientes (003, 004, 005) documentan decisiones ya tomadas y
-aplicadas en el código; se redactan para completar el registro, no porque
-falten por decidir.
+## Cobertura de las decisiones obligatorias
+
+La sección 4.2 del enunciado enumera ocho decisiones que deben quedar
+registradas. Las diez de aquí las cubren todas:
+
+| Decisión exigida (§4.2) | ADR |
+|---|---|
+| Plataforma de despliegue | [001](001-plataforma-de-despliegue.md) |
+| Broker de eventos | [004](004-broker-de-eventos.md) |
+| Persistencia de eventos | [005](005-persistencia.md) |
+| Orquestación de tareas periódicas | [009](009-orquestacion-de-tareas-periodicas.md) |
+| Contenerización y orquestación | [010](010-contenerizacion-y-orquestacion.md) |
+| Resiliencia y tolerancia a fallos | [006](006-resiliencia-y-tolerancia-a-fallos.md) |
+| Seguridad y privacidad de datos | [007](007-privacidad-y-datos-personales.md) |
+| Observabilidad y SLO | [008](008-observabilidad-y-slo.md) |
+
+Los otros dos —[002](002-lenguaje-y-runtime.md) y
+[003](003-organizacion-del-repositorio.md)— no los exige el enunciado, pero
+documentan decisiones que condicionan a todas las demás.
+
+Todos documentan decisiones aplicadas en el código y verificadas sobre el
+sistema en ejecución.

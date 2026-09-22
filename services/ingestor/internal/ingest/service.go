@@ -18,9 +18,9 @@ import (
 
 // Errores del pipeline. El handler HTTP los traduce a codigos de estado.
 //
-// El servicio Java respondia 400 a todo porque el controlador capturaba
-// Exception y devolvia badRequest: un duplicado, una caida de Kafka y un JSON
-// mal formado eran indistinguibles para el cliente.
+// Se distinguen por tipo a proposito: un duplicado, una caida de Kafka y un
+// JSON mal formado exigen reacciones distintas del cliente, y colapsarlos en
+// un solo error los vuelve indistinguibles.
 var (
 	// ErrContrato: el evento no cumple el contrato v1.0 -> 400.
 	ErrContrato = errors.New("el evento no cumple el contrato")
@@ -68,10 +68,10 @@ func New(d *dedupe.Store, p *broker.Publisher, v *canonical.Validator,
 // del enlace detenia la ingesta por completo. Ahora una caida del enlace solo
 // retrasa el archivo historico: la ciudad sigue detectando incidentes.
 //
-// El 202 significa que Kafka confirmo la recepcion con acks=all. El servicio
-// Java publicaba de forma asincrona y respondia 202 sin esperar: si la
-// publicacion fallaba, el cliente ya se habia llevado un "aceptado" y el
-// evento no llegaba nunca al correlator.
+// El 202 significa que Kafka confirmo la recepcion con acks=all. Responder
+// antes de esa confirmacion seria mas rapido y falso: si la publicacion
+// fallara, el cliente ya se habria llevado un "aceptado" por un evento que no
+// llegaria nunca al correlator.
 func (s *Service) Ingest(ctx context.Context, raw []byte) (*canonical.Event, error) {
 	traceID := obs.TraceFrom(ctx)
 	log := obs.LoggerFrom(ctx, s.log)

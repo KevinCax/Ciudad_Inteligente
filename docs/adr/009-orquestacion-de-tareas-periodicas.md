@@ -1,6 +1,6 @@
 # ADR-009: Orquestación de tareas periódicas — retirar Airflow
 
-**Estado:** aceptado (indexer implementado; servicio `jobs` pendiente)
+**Estado:** aceptado e implementado
 **Fecha:** 2026-09-21
 **Decide:** equipo de arquitectura
 **Relacionado con:** [ADR-007](007-privacidad-y-datos-personales.md) (política de retención), [ADR-008](008-observabilidad-y-slo.md) (sustituye a los chequeos de salud)
@@ -17,61 +17,49 @@ El enunciado no plantea este punto de forma neutra. Lo formula como pregunta
 
 Una pregunta así invita a responderla, no a esquivarla adoptando lo sugerido.
 
-El sistema Java de referencia usaba Airflow 2.9 con tres DAGs. La decisión aquí
-es si el sistema en Go lo hereda.
+Airflow exige un servidor web, un planificador y una base de metadatos, con
+sus propias migraciones de esquema y su gestión de usuarios. Adoptarlo se
+justifica si hay trabajo periódico que gobernar, de modo que la pregunta
+previa es cuánto hay.
 
-### Qué hacía Airflow en el sistema Java
+### Las tareas candidatas, una por una
 
-| DAG | Frecuencia | Qué hacía |
-|---|---|---|
-| `healthcheck_dag` | cada 2 min | `curl` al correlator y `nc` a Kafka |
-| `etl_analytics_dag` | cada 15 min | Un `SELECT ... GROUP BY` sobre `alerts` |
-| `pg_to_es_etl_dag` | cada hora | Copiar eventos y alertas de PostgreSQL a Elasticsearch |
+Un sistema como este invita a pensar en cuatro clases de trabajo periódico.
+Tres se disuelven al examinarlas.
 
-A cambio, Airflow exigía un servidor web, un planificador y una base de
-metadatos —SQLite con `SequentialExecutor`, es decir, sin paralelismo—, además
-de sus propias migraciones de esquema y su gestión de usuarios.
+**Chequeos de salud.** La forma clásica es una tarea que consulta cada servicio
+cada pocos minutos y escribe el resultado en un registro. Tras
+[ADR-008](008-observabilidad-y-slo.md) eso sería redundancia sin beneficio:
+Prometheus recoge el estado cada diez segundos y **catorce reglas de alerta**
+avisan sin que nadie mire. Una tarea periódica comprobaría peor y avisaría a
+nadie.
 
-### Dos de las tres tareas ya no existen
+**Limpieza de claves en Redis.** La guía del curso la sugiere, pero el diseño
+de las ventanas ([ADR-006](006-resiliencia-y-tolerancia-a-fallos.md)) poda por
+marca de tiempo en la misma operación de escritura y apoya con TTL. No queda
+nada que limpiar después.
 
-Al revisarlas contra el sistema actual, la situación cambia:
+**Copia periódica de PostgreSQL a Elasticsearch.** Es la tarea que más
+naturalmente pediría un orquestador, y este diseño la elimina por completo
+sustituyéndola por un consumidor de Kafka. El razonamiento está en la sección
+3.2, y es el que más debilita el caso de Airflow.
 
-**`healthcheck_dag` quedó obsoleto.** Hacía `curl` cada dos minutos y escribía
-el resultado en un registro que nadie leía. Tras
-[ADR-008](008-observabilidad-y-slo.md), Prometheus recoge el estado cada diez
-segundos y **once reglas de alerta** avisan sin intervención. Mantener un DAG
-que comprueba peor y avisa a nadie sería redundancia sin beneficio.
+**Agregados y retención.** Estas dos sí son trabajo periódico real y no se
+pueden disolver: dependen del calendario, no de la llegada de un evento.
 
-**`etl_analytics_dag` no hacía nada útil.** Ejecutaba una consulta de
-agregación con `PostgresOperator` y **descartaba el resultado**: no lo escribía
-en ninguna tabla, no lo publicaba, no lo exportaba. Consumía una conexión a la
-base cada quince minutos para producir un resultado que se perdía.
-
-**`pg_to_es_etl_dag` era la única con propósito real**, y no funcionaba: pasaba
-objetos `uuid.UUID` como `_id` al cliente de Elasticsearch, que no puede
-serializarlos a JSON. Además usaba un identificador de conexión distinto al del
-otro DAG (`supabase_postgres` frente a `postgres_default`).
-
-De modo que la pregunta no es "¿conviene Airflow para tres tareas?", sino
-**"¿conviene Airflow para una tarea por hora?"**.
-
-### Qué trabajo periódico necesita realmente el sistema en Go
+### Qué trabajo periódico queda
 
 | Tarea | Frecuencia | Origen |
 |---|---|---|
-| Purga y degradación del histórico | Diaria | [ADR-007](007-privacidad-y-datos-personales.md), pendiente |
+| Purga y degradación del histórico | Diaria | [ADR-007](007-privacidad-y-datos-personales.md) |
 | Agregados diarios por zona y tipo | Diaria | Informes municipales |
-| Indexación en Elasticsearch | — | Ver sección 3.2 |
+| Indexación en Elasticsearch | — | Ninguna: la resuelve un consumidor (sección 3.2) |
 | Limpieza de claves en Redis | **Ninguna** | Los TTL lo resuelven solos |
 | Chequeos de salud | **Ninguna** | [ADR-008](008-observabilidad-y-slo.md) |
 
-La limpieza de Redis merece una nota: la guía del curso la sugiere como tarea
-periódica, pero el diseño de las ventanas
-([ADR-006](006-resiliencia-y-tolerancia-a-fallos.md)) poda por marca de tiempo
-en la misma operación de escritura y apoya con TTL. No queda nada que limpiar
-después.
-
-**El trabajo periódico real son dos tareas nocturnas.**
+**El trabajo periódico real son dos tareas nocturnas.** De ahí que la pregunta
+deje de ser "¿conviene Airflow para gobernar el trabajo periódico?" y pase a
+ser **"¿conviene Airflow para dos tareas que corren de madrugada?"**.
 
 ## 2. Opciones consideradas
 
@@ -93,9 +81,8 @@ después.
   propio y no elástico ([ADR-001](001-plataforma-de-despliegue.md)), eso compite
   con Kafka por la misma memoria.
 - **Carga operativa propia**: migraciones de su base de metadatos, gestión de
-  usuarios, y fallos de arranque cuando el esquema queda desfasado. El README
-  del proyecto Java dedicaba una sección entera a recuperarse de ese error
-  concreto.
+  usuarios y fallos de arranque cuando el esquema queda desfasado, que son una
+  fuente recurrente de incidencias bien documentada.
 - Introduce Python en un sistema que, por lo demás, es un único lenguaje: otro
   ecosistema de dependencias que auditar y actualizar.
 
@@ -175,10 +162,10 @@ capacidad para operar infraestructura accesoria.
 
 Esta es la consecuencia de fondo, y es la que más debilita el caso de Airflow.
 
-El sistema Java copiaba de PostgreSQL a Elasticsearch **cada hora**, lo que
-significa que una búsqueda podía no encontrar un incidente ocurrido cincuenta
-minutos antes. Para una plataforma de seguridad ciudadana, eso es un retraso
-difícil de defender.
+La forma habitual de llevar los eventos a Elasticsearch es una copia periódica
+desde PostgreSQL. Con frecuencia horaria, eso significa que una búsqueda puede
+no encontrar un incidente ocurrido cincuenta minutos antes. Para una plataforma
+de seguridad ciudadana, ese retraso es difícil de defender.
 
 Pero el sistema ya tiene los eventos circulando por Kafka. Indexarlos no
 requiere leer la base periódicamente: requiere **un consumidor más**, con la
@@ -189,7 +176,7 @@ Kafka ──▶ Persister ──▶ PostgreSQL   (archivo autoritativo)
       └──▶ Indexer   ──▶ Elasticsearch (búsqueda, casi en tiempo real)
 ```
 
-Ventajas sobre el ETL por lotes:
+Ventajas sobre la copia periódica:
 
 - La búsqueda pasa de una hora de retraso a segundos.
 - Desaparece la tarea periódica más compleja de las tres.
@@ -204,8 +191,13 @@ para eso resulta indefendible.
 
 | Tarea | Horario | Descripción |
 |---|---|---|
-| **Retención** | Diaria, 03:00 | Aplica la política de [ADR-007](007-privacidad-y-datos-personales.md): elimina el seudónimo de placa pasados 90 días, las coordenadas al año, y conserva solo agregados después |
-| **Agregados diarios** | Diaria, 03:30 | Calcula recuentos por zona y tipo del día anterior y los guarda en una tabla de resumen |
+| **Agregados diarios** | Diaria, 03:00 | Calcula recuentos por zona y tipo del día anterior y los guarda en tablas de resumen |
+| **Retención** | Diaria, 03:30 | Aplica la política de [ADR-007](007-privacidad-y-datos-personales.md): elimina el seudónimo de placa a los 90 días, las coordenadas al año, y borra el evento a los dos, dejando solo el agregado |
+
+El orden no es arbitrario: **los agregados corren antes que la retención**. Si
+la purga borrara los eventos primero, el resumen del día saldría incompleto, y
+esa pérdida sería irreversible porque el agregado es justamente lo que
+sobrevive al borrado.
 
 Ambas se ejecutarán con **bloqueo distribuido en Redis** (`SET NX` con TTL),
 para que dos instancias del servicio no ejecuten la misma purga a la vez. Es el
@@ -223,7 +215,11 @@ decisión debería reconsiderarse si ocurre cualquiera de estas cosas:
 
 - Las tareas periódicas superan la decena, o aparecen **dependencias entre
   ellas** ("ejecutar B solo si A terminó bien").
-- Se necesita **backfill**: reprocesar un rango de fechas pasado.
+- Se necesita **backfill de rangos**. El caso simple ya está cubierto: la
+  ejecución manual acepta una fecha concreta
+  (`POST /tareas/agregados_diarios/ejecutar?dia=2026-09-15`), que resuelve
+  recalcular el día que falló. Reprocesar un mes entero seguiría siendo
+  manual.
 - **Personal no desarrollador** necesita consultar el historial de ejecuciones
   o modificar horarios sin tocar código.
 - Aparecen flujos de datos con ramificaciones o reintentos condicionales.
@@ -240,8 +236,39 @@ tareas nocturnas sigue pendiente.
 | Componente | Estado |
 |---|---|
 | Servicio `indexer` (Kafka → Elasticsearch) | **Listo y verificado** |
-| Servicio `jobs` con las dos tareas nocturnas | Pendiente (~4 h) |
-| Tabla de agregados y política de retención en SQL | Pendiente (~2 h) |
+| Servicio `jobs` con las dos tareas nocturnas | **Listo y verificado** |
+| Tablas de agregados y política de retención en SQL | **Listo y verificado** |
+
+#### Verificación del servicio de tareas
+
+**Los agregados cuadran exactamente con los datos crudos**, y son idempotentes:
+
+| | Agregado | Crudo |
+|---|---|---|
+| Eventos del día | 3 334 | 3 334 |
+| Alertas del día | 90 | 90 |
+
+Repetir la ejecución no duplica filas: 25 filas de eventos y 20 de alertas
+antes y después. El `ON CONFLICT DO UPDATE` recalcula en lugar de insertar.
+
+**La degradación progresiva de la retención funciona en sus tres fases.** Se
+verificó con tres eventos sintéticos de distinta antigüedad:
+
+| Antigüedad | Placa | Coordenadas | Zona | Evento |
+|---|---|---|---|---|
+| 100 días | **eliminada** | conservada | conservada | conservado |
+| 400 días | **eliminada** | **eliminada** | conservada | conservado |
+| 800 días | — | — | — | **borrado** |
+
+Los 3 334 eventos del día quedaron intactos, con sus 728 placas. La purga no
+tocó nada que estuviera dentro de plazo.
+
+**El planificador está probado**: 12 pruebas automáticas, incluidas las del
+cerrojo contra un Redis real. Cubren que la tarea corra una sola vez al día
+aunque se revise el minuto varias veces, que un fallo libere el cerrojo para
+poder reintentar el mismo día, que no corra fuera de su hora, y que una zona
+horaria mal escrita impida arrancar en lugar de desplazar las ejecuciones en
+silencio.
 
 #### Verificación del indexer
 
@@ -258,16 +285,16 @@ Medido el 21 de septiembre de 2026 sobre el sistema en ejecución.
 estable, calculada por diferencia entre dos lecturas del histograma para evitar
 la contaminación del arranque:
 
-| Sistema | Retraso evento → disponible para búsqueda |
+| Enfoque | Retraso evento → disponible para búsqueda |
 |---|---|
-| Java, ETL por lotes `@hourly` | hasta 3 600 s |
-| Go, consumidor de Kafka | **1,01 s** de media |
+| Copia periódica horaria desde la base | hasta 3 600 s |
+| Consumidor de Kafka (lo implementado) | **1,01 s** de media |
 
 El valor se corresponde con lo esperado: `BATCH_TIMEOUT` es de 2 segundos, de
 modo que la espera media de un evento hasta que su lote se cierra es de
 aproximadamente un segundo.
 
-**El mapeo funciona**, que era el fallo del ETL original:
+**El mapeo funciona**, que es donde una copia genérica suele fallar:
 
 ```
 geo        -> geo_point
@@ -277,8 +304,9 @@ score      -> float
 ```
 
 Una consulta geoespacial real —eventos a menos de 5 km de la zona 10— devolvió
-2 198 resultados. Con el mapeo que producía el ETL del sistema Java, esa
-consulta no habría sido posible.
+2 198 resultados. Sin promover `geo` a `geo_point`, esa consulta no sería
+posible: Elasticsearch deduciría los tipos por su cuenta y el campo quedaría
+inutilizable como geolocalización.
 
 **Los seudónimos coinciden entre destinos.** Se verificó sobre tres eventos que
 el token de la placa es idéntico en PostgreSQL y en Elasticsearch, lo que
@@ -309,8 +337,8 @@ accidente —la mezcla de los que llevan caída de velocidad y los que no.
   una pérdida real, y se mitiga solo en parte con un panel en Grafana.
 - **Hay que escribir la planificación, los reintentos y el bloqueo.** Es código
   propio que mantener, frente a funcionalidad que Airflow daba resuelta.
-- **Sin *backfill*.** Si una tarea falla varios días seguidos, recuperar el
-  trabajo perdido exige intervención manual.
+- **Backfill limitado a un día.** La ejecución manual acepta una fecha, pero
+  recuperar varios días seguidos exige repetir la llamada para cada uno.
 - **Se desvía de la herramienta sugerida por el enunciado**, lo que obliga a
   defender la decisión en lugar de apoyarse en ella.
 - **Dos servicios más** que desplegar, aunque su huella conjunta sea una
@@ -339,8 +367,8 @@ Municipalidad, que no se pueden ampliar sobre la marcha, esos recursos hacen
 falta en otro sitio.
 
 También requeriría mantenimiento propio: actualizaciones, gestión de usuarios y
-una fuente recurrente de fallos de arranque que el sistema anterior ya había
-experimentado.
+los fallos de arranque por desfase de esquema, que son una fuente recurrente de
+incidencias.
 
 ### Un beneficio adicional
 
@@ -363,19 +391,15 @@ en el documento técnico cuándo hacerlo.
 
 ### Estado
 
-**Está decidido, no construido.** Las dos tareas y el proceso de búsqueda están
-pendientes de desarrollo, estimados en unas diez horas de trabajo.
-
-Mientras tanto, el sistema **detecta y archiva incidentes con normalidad**: lo
-que falta es la limpieza automática del archivo antiguo y la búsqueda histórica
-avanzada.
+**Construido y verificado.** Las dos tareas nocturnas y el proceso de búsqueda
+funcionan, y se comprobaron con datos reales del sistema en ejecución.
 
 ### Riesgo
 
 | Riesgo | Probabilidad | Impacto | Cómo se atiende |
 |---|---|---|---|
-| Las tareas no se implementan a tiempo | Media | Medio: el archivo crece sin límite y no hay búsqueda histórica | Priorizar el proceso de búsqueda, que aporta más valor |
-| Un fallo silencioso de la tarea nocturna | Baja | Medio | Cada ejecución emite métricas; una ausencia dispara alerta |
+| Un fallo silencioso de la tarea nocturna | Baja | Medio | Cada ejecución registra la hora de su último éxito; si deja de actualizarse, salta una alerta |
+| Una purga mal configurada borra datos vigentes | Baja | **Alto**: el borrado es irreversible | El servicio no arranca si la política es incoherente; se verificó la degradación sobre datos de prueba |
 | Necesidad futura de supervisión sin conocimientos técnicos | Media | Bajo | Criterios de reconsideración documentados |
 
 ---
@@ -390,5 +414,4 @@ avanzada.
   la tarea periódica principal.
 - [ADR-008](008-observabilidad-y-slo.md) — sustituye por completo al DAG de
   chequeos de salud.
-- `../../Ciudad_Inteligente/analytics/dags/` — los tres DAGs del sistema de
-  referencia.
+- `services/jobs/` — implementación del planificador y las dos tareas.

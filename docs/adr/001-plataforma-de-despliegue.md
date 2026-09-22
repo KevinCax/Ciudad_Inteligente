@@ -162,27 +162,39 @@ no debería estar haciendo.
 │                  Redis      │  └── Redis (ventanas)         │
 │                (dedupe)     │                               │
 │                             ▼                               │
-│                        Persister ◄── correlated.alerts      │
+│         Persister · Indexer · Jobs ◄── correlated.alerts    │
 │                             │                               │
+│         Prometheus · Grafana (observabilidad, local)        │
 │        ▼ tokenización de la placa antes de salir ▼          │
 └─────────────────────────────┬───────────────────────────────┘
                               │  TLS, egress controlado
 ┌─────────────────────────────▼──────────────── NUBE ─────────┐
-│  PostgreSQL → Airflow ETL → Elasticsearch → Kibana          │
-│            └───────────────────────────────→ Grafana        │
+│  PostgreSQL gestionada        Elasticsearch → Kibana        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**En la LAN:** el ingestor, Kafka, Redis, el correlator y el persister. Todo el
-recorrido evento → alerta.
+El esquemático completo, con los segmentos de red y los puertos, está en
+`docs/diagramas/infraestructura.svg`.
 
-**En la nube:** PostgreSQL gestionada, Elasticsearch, Kibana, Grafana y las
-tareas periódicas de análisis.
+**En la LAN:** el ingestor, Kafka, Redis, el correlator, los tres servicios de
+salida —persister, indexer y jobs— y la observabilidad. Todo el recorrido
+evento → alerta.
 
-**El persister es la pieza que hace posible el corte.** Es el único componente
-que escribe en la nube: consume de Kafka y archiva por lotes. Ni el ingestor ni
-el correlator escriben fuera de la LAN, de modo que la detección no depende del
-enlace a internet.
+**En la nube:** PostgreSQL gestionada, Elasticsearch y Kibana. Archivo
+histórico y búsqueda, nada más.
+
+**Los servicios de salida son la pieza que hace posible el corte.** Consumen de
+Kafka y escriben por lotes en la nube. Ni el ingestor ni el correlator escriben
+fuera de la LAN, de modo que la detección no depende del enlace a internet.
+
+**La observabilidad también se queda dentro, y no por comodidad.** Recolectar
+métricas exige que el recolector **abra conexiones hacia cada servicio**; con
+Prometheus en la nube, esas serían conexiones de entrada a la red municipal,
+que es justo lo que este modelo excluye. Y si el enlace cae, la detección sigue
+funcionando: es precisamente entonces cuando hacen falta las métricas y las
+alertas, y un recolector al otro lado del enlace se quedaría ciego en el único
+momento en que importa. Grafana lo acompaña porque consulta a Prometheus, y
+separarlos reintroduciría el mismo tráfico de entrada.
 
 Situarlo exactamente sobre la frontera tiene una consecuencia afortunada: es
 también el lugar natural para transformar los datos personales. La placa

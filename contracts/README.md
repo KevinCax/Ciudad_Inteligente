@@ -23,15 +23,15 @@ El precio es el riesgo de drift entre copias, y se mitiga con `make sync-contrac
 
 ### canonical-event v1.0
 
-Copia literal del schema del proyecto Java de referencia. **No modificar**: es el contrato acordado de la clase (`Final-Project-Guide.md` seccion 2.3) y los simuladores existentes dependen de el.
+Contrato de entrada del sistema. **No modificar sin versionar**: es el acuerdo con los productores (enunciado, seccion 2.3) y todos los simuladores dependen de el.
 
-Nota sobre `additionalProperties: false`: en el proyecto Java la validacion corria sobre el objeto ya deserializado, asi que Jackson descartaba los campos desconocidos antes de validar y esta restriccion nunca detectaba nada. En Go validamos el **JSON crudo** antes de deserializar, con lo cual la restriccion si se aplica de verdad.
+Nota sobre `additionalProperties: false`: la restriccion solo se aplica de verdad si se valida el **JSON crudo** antes de deserializar. Validando el objeto ya deserializado, el deserializador descarta los campos desconocidos antes de que el validador los vea, y la restriccion no detecta nada.
 
 ### correlated-alert v1.0
 
-Contrato nuevo. En el sistema Java la alerta no tenia schema formal, solo una clase. Formalizarlo permite validar la salida antes de publicarla y documenta dos cosas que hoy estan rotas o implicitas:
+Contrato de salida. Formalizarlo —en lugar de dejar la alerta definida solo por el codigo que la construye— permite validarla antes de publicarla y deja explicitas dos cosas que de otro modo quedarian implicitas:
 
-- `score` es `number` entre 0 y 1. En Java se persistia como `Integer`, asi que 0.85 / 0.90 / 0.95 se guardaban como `1`.
+- `score` es `number` entre 0 y 1, no un entero: redondearlo guardaria 0.85, 0.90 y 0.95 como `1` y borraria la gradacion de confianza.
 - `rule_version` es nuevo: permite auditar con que umbrales se genero cada alerta cuando las reglas se vuelven configurables.
 
 ## Cambiar un contrato
