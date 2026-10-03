@@ -259,9 +259,9 @@ siendo posible.
 ### Una ventaja de tenerlos separados
 
 Si el buscador falla, **el archivo oficial permanece intacto** y el buscador se
-reconstruye solo a partir del sistema de transporte. En el diseño anterior, el
-buscador se alimentaba copiando de la base de datos cada hora, lo que ataba el
-funcionamiento de uno al del otro.
+reconstruye solo a partir del sistema de transporte. Si el buscador se
+alimentara copiando de la base de datos cada cierto tiempo —que es la forma
+habitual— el funcionamiento de uno quedaría atado al del otro.
 
 ### Qué costó
 

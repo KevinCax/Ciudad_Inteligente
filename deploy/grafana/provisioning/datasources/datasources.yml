@@ -20,6 +20,13 @@ datasources:
     secureJsonData:
       password: ${GRAFANA_PG_PASSWORD}
     jsonData:
+      # La base de datos va AQUI, no en el nivel superior. Grafana 11 movio
+      # este campo a jsonData: el backend todavia acepta el sitio antiguo, de
+      # modo que las consultas por API funcionan, pero el plugin del navegador
+      # solo mira jsonData.database y, si lo ve vacio, se niega a enviar la
+      # consulta. El tablero queda en "No data" sin una sola peticion HTTP ni
+      # un solo error en el log del servidor.
+      database: ${GRAFANA_PG_DATABASE}
       sslmode: ${GRAFANA_PG_SSLMODE}
       postgresVersion: 1600
       timescaledb: false
@@ -38,7 +45,9 @@ datasources:
     type: elasticsearch
     access: proxy
     url: http://elasticsearch:9200
-    database: "events-*"
     jsonData:
+      # Mismo caso que en Postgres: el indice se mudo de "database" a
+      # jsonData.index.
+      index: "events-*"
       timeField: timestamp
       esVersion: "8.0.0"

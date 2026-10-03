@@ -128,24 +128,37 @@ def tablero(uid, titulo, descripcion, etiquetas, paneles, variables,
     }
 
 
-def var_prom_zona():
+ZONAS = ["zona_1", "zona_2", "zona_3", "zona_4", "zona_5", "zona_6", "zona_7",
+         "zona_8", "zona_9", "zona_10", "zona_11", "zona_12", "zona_13",
+         "zona_14", "zona_15", "zona_16", "zona_17", "zona_18", "zona_19",
+         "zona_21", "zona_24", "zona_25"]
+
+
+def var_zona(comodin):
+    # Variable CUSTOM, no de consulta. El catalogo de zonas es un hecho del
+    # municipio, no un dato que haya que descubrir en los eventos: la zona 16
+    # existe aunque hoy no haya reportado nada. Ademas una variable de consulta
+    # que falla deja el tablero entero sin resolver y Grafana no lanza NINGUNA
+    # consulta de panel, ni siquiera de los paneles que no usan la variable. El
+    # sintoma es "No data" en todo con el origen de datos sano, y lo delata el
+    # triangulo rojo junto al selector de zona. Una lista fija no puede fallar.
+    #
+    # comodin es el valor de "All": "%" para LIKE de SQL, ".*" para PromQL.
     return {
-        "name": "zona", "label": "Zona", "type": "query", "datasource": PROM,
-        "definition": "label_values(ingestor_events_ingested_total, zone)",
-        "query": {"query": "label_values(ingestor_events_ingested_total, zone)", "refId": "zona"},
-        "refresh": 2, "includeAll": True, "allValue": ".*", "multi": False,
-        "sort": 1, "options": [], "current": {"selected": True, "text": "All", "value": "$__all"},
+        "name": "zona", "label": "Zona", "type": "custom",
+        "query": ",".join(ZONAS),
+        "options": [{"selected": False, "text": z, "value": z} for z in ZONAS],
+        "includeAll": True, "allValue": comodin, "multi": False,
+        "current": {"selected": True, "text": "All", "value": "$__all"},
     }
+
+
+def var_prom_zona():
+    return var_zona(".*")
 
 
 def var_pg_zona():
-    return {
-        "name": "zona", "label": "Zona", "type": "query", "datasource": PG,
-        "definition": "SELECT DISTINCT zone FROM events WHERE zone IS NOT NULL ORDER BY 1",
-        "query": "SELECT DISTINCT zone FROM events WHERE zone IS NOT NULL ORDER BY 1",
-        "refresh": 2, "includeAll": True, "allValue": "%", "multi": False,
-        "sort": 1, "options": [], "current": {"selected": True, "text": "All", "value": "$__all"},
-    }
+    return var_zona("%")
 
 
 # ===========================================================================
@@ -191,12 +204,16 @@ p1.append(panel("timeseries", "Alertas correlacionadas por tipo", 12, 4, 12, 9, 
                 OPT_SERIE,
                 "possible_robbery, accident, fire y traffic_speed_violation."))
 
-p1.append(panel("bargauge", "Eventos vigentes en la ventana de correlacion", 0, 13, 8, 8, PROM,
-                [prom('correlator_window_events', "{{zone}}")],
+# topk y no la lista completa: una ciudad tiene decenas de zonas y un panel que
+# las enumere todas deja de leerse en cuanto hay trafico. Lo que importa aqui no
+# es el censo de zonas sino cuales tienen la ventana mas cargada, porque es la
+# que encarece cada evaluacion.
+p1.append(panel("bargauge", "Zonas con la ventana de correlacion mas cargada", 0, 13, 8, 8, PROM,
+                [prom('topk(10, correlator_window_events)', "{{zone}}")],
                 campos(unit="short", decimals=0, min_=0,
                        thr=umbrales((VERDE, None), (AMARILLO, 2000), (ROJO, 5000))),
                 barra(),
-                "Una ventana desproporcionada encarece cada evaluacion. Por encima de 5000 salta VentanaDeCorrelacionDesproporcionada."))
+                "Las diez zonas con mas eventos vigentes. Una ventana desproporcionada encarece cada evaluacion: por encima de 5000 salta VentanaDeCorrelacionDesproporcionada."))
 
 p1.append(panel("timeseries", "Eventos rechazados, por motivo", 8, 13, 8, 8, PROM,
                 [prom('sum by (reason) (rate(ingestor_events_rejected_total[$__rate_interval]))',
@@ -253,6 +270,23 @@ p2 = []
 
 FILTRO_EV = "$__timeFilter(ts_utc) AND zone LIKE '$zona'"
 FILTRO_AL = "$__timeFilter(created_at) AND zone LIKE '$zona'"
+FILTRO_AL_A = "$__timeFilter(a.created_at) AND a.zone LIKE '$zona'"
+
+# Una alerta no guarda coordenadas: guarda los event_id que la sustentan. La
+# ubicacion de un incidente es, por tanto, la de sus evidencias.
+#
+# Se promedia en lugar de tomar el primer evento porque una alerta correlaciona
+# varios sensores proximos —el boton de panico, la camara, el microfono— y
+# ninguno esta exactamente donde ocurrio el hecho: el punto medio se aproxima
+# mas al incidente que cualquiera de los aparatos por separado.
+UBICACION = (
+    "LEFT JOIN LATERAL (\n"
+    "  SELECT round(avg(e.geo_lat), 6) AS lat,\n"
+    "         round(avg(e.geo_lon), 6) AS lon\n"
+    "  FROM jsonb_array_elements_text(coalesce(a.evidence, '[]'::jsonb)) AS ev(id)\n"
+    "  JOIN events e ON e.event_id = ev.id::uuid\n"
+    "  WHERE e.geo_lat IS NOT NULL\n"
+    ") u ON TRUE")
 
 p2.append(panel("stat", "Eventos en el periodo", 0, 0, 6, 4, PG,
                 [sql("SELECT count(*) AS eventos FROM events WHERE " + FILTRO_EV)],
@@ -282,7 +316,12 @@ p2.append(panel("geomap", "Mapa de calor de eventos", 0, 4, 14, 13, PG,
                 campos(unit="short", decimals=0, mode="continuous-GrYlRd"),
                 {"view": {"id": "coords", "lat": 14.6349, "lon": -90.5069, "zoom": 11,
                           "allLayers": True},
-                 "basemap": {"type": "default", "name": "Mapa base", "config": {}},
+                 # OpenStreetMap explicito, no "default". El mapa base por
+                 # defecto de Grafana 12 es CARTO, que exige una clave de API:
+                 # sin ella el panel se muestra con "API KEY REQUIRED" escrito
+                 # en diagonal sobre todo el mapa, y en una demostracion eso es
+                 # lo primero que ve el evaluador. OSM no pide clave.
+                 "basemap": {"type": "osm-standard", "name": "OpenStreetMap", "config": {}},
                  "layers": [
                      {"type": "heatmap", "name": "Densidad de eventos",
                       "tooltip": True, "opacity": 0.9,
@@ -371,23 +410,72 @@ p2.append(panel("barchart", "Alertas por tipo", 18, 17, 6, 8, PG,
                  "legend": {"displayMode": "list", "placement": "bottom", "showLegend": False}}))
 
 p2.append(panel("table", "Lista de incidentes correlacionados", 0, 25, 24, 10, PG,
-                [sql("SELECT created_at   AS \"Hora\",\n"
-                     "       type         AS \"Tipo de alerta\",\n"
-                     "       zone         AS \"Zona\",\n"
-                     "       round(score, 2) AS \"Confianza\",\n"
-                     "       window_start AS \"Inicio de ventana\",\n"
-                     "       window_end   AS \"Fin de ventana\",\n"
-                     "       jsonb_array_length(evidence) AS \"Evidencias\",\n"
-                     "       correlation_id AS \"Correlacion\"\n"
-                     "FROM alerts\n"
-                     "WHERE " + FILTRO_AL + "\n"
-                     "ORDER BY created_at DESC\n"
+                [sql("SELECT a.created_at   AS \"Hora\",\n"
+                     "       a.type         AS \"Tipo de alerta\",\n"
+                     "       a.zone         AS \"Zona\",\n"
+                     "       round(a.score, 2) AS \"Confianza\",\n"
+                     "       u.lat          AS \"Latitud\",\n"
+                     "       u.lon          AS \"Longitud\",\n"
+                     "       a.window_start AS \"Inicio de ventana\",\n"
+                     "       a.window_end   AS \"Fin de ventana\",\n"
+                     "       jsonb_array_length(a.evidence) AS \"Evidencias\",\n"
+                     "       a.correlation_id AS \"Correlacion\"\n"
+                     "FROM alerts a\n"
+                     + UBICACION + "\n"
+                     "WHERE " + FILTRO_AL_A + "\n"
+                     "ORDER BY a.created_at DESC\n"
                      "LIMIT 200")],
                 campos(unit="short",
                        custom={"align": "auto", "cellOptions": {"type": "auto"},
                                "inspect": False, "filterable": True}),
                 OPT_TABLA,
                 "La ventana es el intervalo de eventos que sustenta la alerta. El identificador de correlacion permite reconstruir el incidente completo."))
+
+p2.append(panel("geomap", "Ubicacion exacta de cada alerta", 0, 35, 24, 14, PG,
+                [sql("SELECT a.created_at AS \"Hora\",\n"
+                     "       a.type       AS \"Tipo\",\n"
+                     "       a.zone       AS \"Zona\",\n"
+                     "       round(a.score, 2) AS \"Confianza\",\n"
+                     "       jsonb_array_length(coalesce(a.evidence, '[]'::jsonb))"
+                     " AS \"Evidencias\",\n"
+                     "       u.lat AS latitude,\n"
+                     "       u.lon AS longitude\n"
+                     "FROM alerts a\n"
+                     + UBICACION + "\n"
+                     "WHERE " + FILTRO_AL_A + " AND u.lat IS NOT NULL\n"
+                     "ORDER BY a.created_at DESC\n"
+                     "LIMIT 500")],
+                campos(unit="short", decimals=2, mode="continuous-GrYlRd",
+                       min_=0.8, max_=1.0),
+                {"view": {"id": "coords", "lat": 14.6349, "lon": -90.5069, "zoom": 11,
+                          "allLayers": True},
+                 "basemap": {"type": "osm-standard", "name": "OpenStreetMap", "config": {}},
+                 "layers": [
+                     {"type": "markers", "name": "Alertas",
+                      "tooltip": True, "opacity": 0.85,
+                      "location": {"mode": "coords", "latitude": "latitude",
+                                   "longitude": "longitude"},
+                      "config": {"showLegend": True,
+                                 "style": {"color": {"field": "Confianza", "fixed": "dark-red"},
+                                           "opacity": 0.8,
+                                           "size": {"field": "Evidencias", "fixed": 6,
+                                                    "min": 5, "max": 14},
+                                           "symbol": {"mode": "fixed",
+                                                      "fixed": "img/icons/marker/circle.svg"},
+                                           "symbolAlign": {"horizontal": "center",
+                                                           "vertical": "center"},
+                                           "textConfig": {"fontSize": 12, "offsetX": 0,
+                                                          "offsetY": 0, "textAlign": "center",
+                                                          "textBaseline": "middle"}}}}],
+                 "controls": {"showZoom": True, "mouseWheelZoom": True,
+                              "showAttribution": True, "showScale": False,
+                              "showMeasure": True, "showDebug": False},
+                 # "details" vuelca TODAS las columnas de la consulta al pasar
+                 # el raton: hora, tipo, zona, confianza, evidencias y las dos
+                 # coordenadas. Es lo que convierte un punto en un incidente
+                 # identificable, en vez de una mancha de color.
+                 "tooltip": {"mode": "details"}},
+                "Un punto por alerta, situado en el promedio de las coordenadas de los eventos que la sustentan. El color es la confianza y el tamano el numero de evidencias. La regla de medicion permite estimar distancias entre incidentes."))
 
 d2 = tablero("ciudad-incidentes", "Ciudad Inteligente — Incidentes y mapa de calor",
              "Mapa de calor, lista de incidentes y alertas criticas, sobre los datos archivados en PostgreSQL. Cubre los tres casos de visualizacion de la seccion 7 del enunciado.",

@@ -85,8 +85,8 @@ ventana de su zona. Cada regla devuelve una de tres cosas:
 | **Detección** | El patrón está completo | Se emite una alerta, salvo supresión |
 | **Parcial** | El disparador está, falta el complemento | Se anota como candidato a falso positivo |
 
-El tercer caso es el que distingue este motor del de referencia, y se explica
-en el apartado 6.
+El tercer caso es el menos habitual en un motor de reglas, y el que hace
+medible la tasa de falsos positivos. Se explica en el apartado 6.
 
 ## 4. Las cuatro reglas
 

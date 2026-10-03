@@ -43,7 +43,7 @@ La red `ciudad_lan` la crea el compose de edge; el de nube se conecta a ella com
 | Servicio | URL | Notas |
 |---|---|---|
 | Ingestor | http://localhost:8000 | `/events`, `/events/health`, `/events/schema`, `/metrics` |
-| Correlator | http://localhost:8080 | `/alerts/active`, `/alerts/db`, `/health`, `/metrics` |
+| Correlator | http://localhost:8001 | `/alerts/active`, `/alerts/db`, `/health`, `/metrics` |
 | Persister | http://localhost:8002 | `/health`, `/metrics` |
 | Indexer | http://localhost:8003 | `/health`, `/metrics` |
 | Jobs | http://localhost:8004 | `/health`, `/metrics`, `/tareas` |
@@ -78,19 +78,19 @@ Los crea `kafka-init` al arrancar, y termina.
 Comprobar que todo responde:
 
 ```bash
-curl -s http://localhost:8000/events/health | jq
+curl -s http://localhost:8000/events/health | python -m json.tool
 ```
 
 ```bash
-curl -s http://localhost:8080/health | jq
+curl -s http://localhost:8001/health | python -m json.tool
 ```
 
 ```bash
-curl -s http://localhost:8002/health | jq
+curl -s http://localhost:8002/health | python -m json.tool
 ```
 
 ```bash
-curl -s http://localhost:8003/health | jq
+curl -s http://localhost:8003/health | python -m json.tool
 ```
 
 Los cuatro deben devolver `status: "UP"` con sus dependencias en `available`. El indexer necesita Elasticsearch, que esta en la capa nube: hay que levantarla antes con `./make.sh up-cloud`. Fíjate en que el health del ingestor **no menciona PostgreSQL**: ya no depende de la base.
@@ -98,11 +98,11 @@ Los cuatro deben devolver `status: "UP"` con sus dependencias en `available`. El
 Generar una alerta de posible robo — botón de pánico seguido de un vehículo a alta velocidad en la misma zona:
 
 ```bash
-curl -s -X POST http://localhost:8000/events -H 'Content-Type: application/json' -d '{"event_version":"1.0","event_type":"panic.button","event_id":"'$(uuidgen)'","producer":"prueba-e2e","source":"simulated","geo":{"zone":"zona_10","lat":14.599,"lon":-90.513},"severity":"critical","payload":{"tipo_de_alerta":"panico","identificador_dispositivo":"BTN-001"}}' | jq
+curl -s -X POST http://localhost:8000/events -H 'Content-Type: application/json' -d '{"event_version":"1.0","event_type":"panic.button","event_id":"'$(uuidgen)'","producer":"prueba-e2e","source":"simulated","geo":{"zone":"zona_10","lat":14.599,"lon":-90.513},"severity":"critical","payload":{"tipo_de_alerta":"panico","identificador_dispositivo":"BTN-001"}}' | python -m json.tool
 ```
 
 ```bash
-curl -s -X POST http://localhost:8000/events -H 'Content-Type: application/json' -d '{"event_version":"1.0","event_type":"sensor.lpr","event_id":"'$(uuidgen)'","producer":"prueba-e2e","source":"simulated","geo":{"zone":"zona_10","lat":14.599,"lon":-90.513},"severity":"warning","payload":{"placa_vehicular":"P123ABC","velocidad_estimada":95}}' | jq
+curl -s -X POST http://localhost:8000/events -H 'Content-Type: application/json' -d '{"event_version":"1.0","event_type":"sensor.lpr","event_id":"'$(uuidgen)'","producer":"prueba-e2e","source":"simulated","geo":{"zone":"zona_10","lat":14.599,"lon":-90.513},"severity":"warning","payload":{"placa_vehicular":"P123ABC","velocidad_estimada":95}}' | python -m json.tool
 ```
 
 Ambos deben responder `202`. Ninguno lleva `timestamp`, `trace_id`, `correlation_id` ni `partition_key`: el ingestor los completa.
@@ -110,7 +110,7 @@ Ambos deben responder `202`. Ninguno lleva `timestamp`, `trace_id`, `correlation
 Verificar la alerta:
 
 ```bash
-curl -s "http://localhost:8080/alerts/active?zone=zona_10" | jq
+curl -s "http://localhost:8001/alerts/active?zone=zona_10" | python -m json.tool
 ```
 
 Debe aparecer una alerta `possible_robbery` con `score` **0.85** — un número real, no un entero: la gradación de confianza entre 0.85, 0.90 y 0.95 es lo que distingue una regla de otra.
@@ -142,11 +142,11 @@ Las alertas se siguen generando y aparecen en `/alerts/active`. Al volver a leva
 Comprobar la busqueda en Elasticsearch:
 
 ```bash
-curl -s "http://localhost:9200/events-*/_count" | jq
+curl -s "http://localhost:9200/events-*/_count" | python -m json.tool
 ```
 
 ```bash
-curl -s "http://localhost:9200/events-*/_search?q=event_type:sensor.lpr&size=1" | jq '.hits.hits[0]._source'
+curl -s "http://localhost:9200/events-*/_search?q=event_type:sensor.lpr&size=1" | python -m json.tool '.hits.hits[0]._source'
 ```
 
 La placa debe aparecer tokenizada, igual que en PostgreSQL, y `geo` debe ser un objeto `{lat, lon}` apto para mapas.
@@ -154,13 +154,13 @@ La placa debe aparecer tokenizada, igual que en PostgreSQL, y `geo` debe ser un 
 Comprobar las tareas periodicas:
 
 ```bash
-curl -s http://localhost:8004/tareas | jq
+curl -s http://localhost:8004/tareas | python -m json.tool
 ```
 
 Lanzar los agregados de hoy a mano, sin esperar a las 03:00:
 
 ```bash
-curl -s -X POST "http://localhost:8004/tareas/agregados_diarios/ejecutar?dia=$(date -u +%F)" | jq
+curl -s -X POST "http://localhost:8004/tareas/agregados_diarios/ejecutar?dia=$(date -u +%F)" | python -m json.tool
 ```
 
 ```bash
@@ -172,7 +172,7 @@ Los agregados deben cuadrar con los datos crudos, y repetir la ejecucion no debe
 Medir el SLO:
 
 ```bash
-curl -s http://localhost:8080/metrics | grep correlation_latency_seconds_bucket
+curl -s http://localhost:8001/metrics | grep correlation_latency_seconds_bucket
 ```
 
 ## Apagado

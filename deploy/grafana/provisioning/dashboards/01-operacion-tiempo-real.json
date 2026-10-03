@@ -31,22 +31,123 @@
       {
         "name": "zona",
         "label": "Zona",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "prometheus-ciudad"
-        },
-        "definition": "label_values(ingestor_events_ingested_total, zone)",
-        "query": {
-          "query": "label_values(ingestor_events_ingested_total, zone)",
-          "refId": "zona"
-        },
-        "refresh": 2,
+        "type": "custom",
+        "query": "zona_1,zona_2,zona_3,zona_4,zona_5,zona_6,zona_7,zona_8,zona_9,zona_10,zona_11,zona_12,zona_13,zona_14,zona_15,zona_16,zona_17,zona_18,zona_19,zona_21,zona_24,zona_25",
+        "options": [
+          {
+            "selected": false,
+            "text": "zona_1",
+            "value": "zona_1"
+          },
+          {
+            "selected": false,
+            "text": "zona_2",
+            "value": "zona_2"
+          },
+          {
+            "selected": false,
+            "text": "zona_3",
+            "value": "zona_3"
+          },
+          {
+            "selected": false,
+            "text": "zona_4",
+            "value": "zona_4"
+          },
+          {
+            "selected": false,
+            "text": "zona_5",
+            "value": "zona_5"
+          },
+          {
+            "selected": false,
+            "text": "zona_6",
+            "value": "zona_6"
+          },
+          {
+            "selected": false,
+            "text": "zona_7",
+            "value": "zona_7"
+          },
+          {
+            "selected": false,
+            "text": "zona_8",
+            "value": "zona_8"
+          },
+          {
+            "selected": false,
+            "text": "zona_9",
+            "value": "zona_9"
+          },
+          {
+            "selected": false,
+            "text": "zona_10",
+            "value": "zona_10"
+          },
+          {
+            "selected": false,
+            "text": "zona_11",
+            "value": "zona_11"
+          },
+          {
+            "selected": false,
+            "text": "zona_12",
+            "value": "zona_12"
+          },
+          {
+            "selected": false,
+            "text": "zona_13",
+            "value": "zona_13"
+          },
+          {
+            "selected": false,
+            "text": "zona_14",
+            "value": "zona_14"
+          },
+          {
+            "selected": false,
+            "text": "zona_15",
+            "value": "zona_15"
+          },
+          {
+            "selected": false,
+            "text": "zona_16",
+            "value": "zona_16"
+          },
+          {
+            "selected": false,
+            "text": "zona_17",
+            "value": "zona_17"
+          },
+          {
+            "selected": false,
+            "text": "zona_18",
+            "value": "zona_18"
+          },
+          {
+            "selected": false,
+            "text": "zona_19",
+            "value": "zona_19"
+          },
+          {
+            "selected": false,
+            "text": "zona_21",
+            "value": "zona_21"
+          },
+          {
+            "selected": false,
+            "text": "zona_24",
+            "value": "zona_24"
+          },
+          {
+            "selected": false,
+            "text": "zona_25",
+            "value": "zona_25"
+          }
+        ],
         "includeAll": true,
         "allValue": ".*",
         "multi": false,
-        "sort": 1,
-        "options": [],
         "current": {
           "selected": true,
           "text": "All",
@@ -486,7 +587,7 @@
     {
       "id": 7,
       "type": "bargauge",
-      "title": "Eventos vigentes en la ventana de correlacion",
+      "title": "Zonas con la ventana de correlacion mas cargada",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -504,7 +605,7 @@
             "type": "prometheus",
             "uid": "prometheus-ciudad"
           },
-          "expr": "correlator_window_events",
+          "expr": "topk(10, correlator_window_events)",
           "editorMode": "code",
           "range": true,
           "instant": false,
@@ -558,7 +659,7 @@
         "namePlacement": "auto",
         "sizing": "auto"
       },
-      "description": "Una ventana desproporcionada encarece cada evaluacion. Por encima de 5000 salta VentanaDeCorrelacionDesproporcionada."
+      "description": "Las diez zonas con mas eventos vigentes. Una ventana desproporcionada encarece cada evaluacion: por encima de 5000 salta VentanaDeCorrelacionDesproporcionada."
     },
     {
       "id": 8,

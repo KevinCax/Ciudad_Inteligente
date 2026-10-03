@@ -15,17 +15,20 @@
 //	go run . -escenario alertas
 //	go run . -escenario bulk
 //	go run . -escenario enunciado
+//	go run . -escenario tormenta -alertas 100
 package main
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,18 +43,23 @@ import (
 
 func main() {
 	var (
-		url        = flag.String("url", "http://localhost:8000", "URL base del ingestor")
-		apiKey     = flag.String("api-key", "", "valor de la cabecera X-API-Key")
-		escenario  = flag.String("escenario", "sostenido", "sostenido | rafaga | alertas | bulk | enunciado")
-		rps        = flag.Int("rps", 10, "eventos por segundo en el escenario sostenido")
-		duracion   = flag.Duration("duracion", 30*time.Second, "duracion del escenario sostenido")
-		conc       = flag.Int("concurrencia", 50, "peticiones simultaneas maximas")
-		lote       = flag.Int("lote", 20, "eventos por lote en el escenario bulk")
-		correlador = flag.String("correlator", "http://localhost:8080", "URL base del correlator, para leer sus metricas")
+		url       = flag.String("url", "http://localhost:8000", "URL base del ingestor")
+		apiKey    = flag.String("api-key", "", "valor de la cabecera X-API-Key")
+		escenario = flag.String("escenario", "sostenido", "sostenido | rafaga | alertas | bulk | enunciado | tormenta")
+		rps       = flag.Int("rps", 10, "eventos por segundo en el escenario sostenido")
+		duracion  = flag.Duration("duracion", 30*time.Second, "duracion del escenario sostenido")
+		conc      = flag.Int("concurrencia", 50, "peticiones simultaneas maximas")
+		lote      = flag.Int("lote", 20, "eventos por lote en el escenario bulk")
+		cuantas   = flag.Int("alertas", 100, "alertas simultaneas en el escenario tormenta")
+		// El correlator se publica en el host en 8001, no en 8080: dentro de
+		// Docker sigue en 8080, pero ese puerto choca a menudo con otro
+		// programa en las maquinas de desarrollo. Ver CORRELATOR_HOST_PORT.
+		correlador = flag.String("correlator", "http://localhost:8001", "URL base del correlator, para consultarlo y leer sus metricas")
 		espera     = flag.Duration("espera", 3*time.Minute, "cuanto esperar a que cierre la ventana en el escenario enunciado")
 	)
 	flag.Parse()
 
+	urlCorrelator = strings.TrimSuffix(*correlador, "/")
 	gen := &generador{url: *url, apiKey: *apiKey, concurrencia: *conc}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -76,8 +84,11 @@ func main() {
 	case "enunciado":
 		fmt.Printf("Tabla 2.4 del enunciado: los dos renglones, uno positivo y uno negativo\n\n")
 		res = gen.enunciado(ctx, *correlador, *espera)
+	case "tormenta":
+		fmt.Printf("Tormenta: %d incidentes simultaneos sobre las zonas de la ciudad\n\n", *cuantas)
+		res = gen.tormenta(ctx, *cuantas, urlCorrelator)
 	default:
-		log.Fatalf("escenario desconocido: %q (usa sostenido, rafaga, alertas, bulk o enunciado)", *escenario)
+		log.Fatalf("escenario desconocido: %q (usa sostenido, rafaga, alertas, bulk, enunciado o tormenta)", *escenario)
 	}
 
 	res.imprimir()
@@ -91,6 +102,15 @@ func main() {
 // ---------------------------------------------------------------------------
 // Generador
 // ---------------------------------------------------------------------------
+
+// urlCorrelator es como se alcanza el correlator DESDE EL HOST. Lo fija main a
+// partir de la bandera -correlator.
+//
+// Es una variable de paquete y no un campo porque las ordenes que se imprimen
+// al terminar cada escenario tambien la necesitan, y repetir el puerto a mano
+// en cada fmt.Println es como acaba divergiendo del despliegue: las
+// instrucciones siguen imprimiendose, pero apuntan a donde ya no hay nadie.
+var urlCorrelator = "http://localhost:8001"
 
 type generador struct {
 	url          string
@@ -179,7 +199,7 @@ func (g *generador) alertas(ctx context.Context) *resultados {
 
 	fmt.Println("\n  Consultar las alertas generadas:")
 	for _, e := range escenarios {
-		fmt.Printf("    curl -s \"http://localhost:8080/alerts/active?zone=%s\"\n", e.zona)
+		fmt.Printf("    curl -s \"%s/alerts/active?zone=%s\"\n", urlCorrelator, e.zona)
 	}
 	fmt.Println()
 
@@ -478,6 +498,162 @@ func valorDe(ms []muestra, nombre string, etiquetas map[string]string) float64 {
 // cuando el sistema lleva horas en marcha: lo que importa es cuanto subio.
 func delta(antes, despues []muestra, nombre string, etiquetas map[string]string) float64 {
 	return valorDe(despues, nombre, etiquetas) - valorDe(antes, nombre, etiquetas)
+}
+
+// tormenta dispara N incidentes a la vez, cada uno en su propia zona.
+//
+// Responde a "¿que pasa si estallan cien incidentes simultaneos?".
+//
+// La respuesta honesta no es "cien alertas". El correlator deduplica por zona
+// y tipo: dos incidentes del mismo tipo en la misma zona son, para el, el
+// mismo incidente, y el segundo se suprime. Con las zonas reales de la ciudad
+// el techo de alertas distintas es zonas x tipos, y por encima de ahi todo lo
+// demas se suprime.
+//
+// Inventar una zona por incidente daria el numero redondo que uno espera, y
+// seria mentira: ensuciaria las metricas y el archivo con zonas inexistentes,
+// y presentaria como capacidad lo que en realidad es ausencia de
+// deduplicacion. Por eso el escenario usa las zonas que la ciudad tiene y
+// reporta las dos cifras: cuantas alertas distintas salieron y cuantas se
+// suprimieron.
+func (g *generador) tormenta(ctx context.Context, cuantas int, correlator string) *resultados {
+	res := nuevosResultados()
+	if cuantas < 1 {
+		cuantas = 1
+	}
+
+	antes, err := g.leerMuestras(ctx, correlator)
+	if err != nil {
+		fmt.Printf("  no se pudieron leer las metricas del correlator: %v\n", err)
+		res.registrarError("metricas")
+		return res
+	}
+
+	tipos := []struct {
+		nombre    string
+		secuencia func(string) []map[string]any
+	}{
+		{"possible_robbery", secuenciaRobo},
+		{"accident", secuenciaAccidente},
+		{"fire", secuenciaIncendio},
+		{"traffic_speed_violation", secuenciaVelocidad},
+	}
+
+	// Cada incidente ocupa una combinacion (zona, tipo) distinta, y ese
+	// producto es el techo de alertas DISTINTAS que el sistema puede emitir:
+	// para el correlator, dos incidentes del mismo tipo en la misma zona son
+	// el mismo incidente, y el segundo se suprime.
+	combinaciones := len(zonas) * len(tipos)
+	esperadas := cuantas
+	if esperadas > combinaciones {
+		esperadas = combinaciones
+	}
+
+	fmt.Printf("  %d zonas x %d tipos = %d alertas distintas posibles\n",
+		len(zonas), len(tipos), combinaciones)
+	if cuantas > combinaciones {
+		fmt.Printf("  se lanzan %d incidentes, asi que al menos %d repetiran\n",
+			cuantas, cuantas-combinaciones)
+		fmt.Println("  combinacion y quedaran suprimidos. Es el comportamiento correcto.")
+	}
+
+	reparto := map[string]int{}
+	for i := 0; i < esperadas; i++ {
+		reparto[tipos[i%len(tipos)].nombre]++
+	}
+	fmt.Printf("\n  lanzando %d secuencias en paralelo...\n", cuantas)
+
+	inicio := time.Now()
+	guardia := make(chan struct{}, g.concurrencia)
+	var wg sync.WaitGroup
+
+	for i := 0; i < cuantas; i++ {
+		if ctx.Err() != nil {
+			break
+		}
+		// Se recorre el producto (zona, tipo) para agotar las combinaciones
+		// distintas antes de repetir ninguna.
+		zona := zonas[(i/len(tipos))%len(zonas)].nombre
+		eventos := tipos[i%len(tipos)].secuencia(zona)
+
+		guardia <- struct{}{}
+		wg.Add(1)
+		go func(evs []map[string]any) {
+			defer wg.Done()
+			defer func() { <-guardia }()
+			// Dentro de una zona los eventos van EN ORDEN y separados en el
+			// tiempo: la caida de velocidad del accidente es una transicion
+			// entre lecturas consecutivas, y sin orden no existe.
+			for _, ev := range evs {
+				g.enviar(ctx, ev, res)
+				time.Sleep(60 * time.Millisecond)
+			}
+		}(eventos)
+	}
+	wg.Wait()
+	envio := time.Since(inicio)
+
+	fmt.Printf("  enviadas en %s; esperando a que el correlator termine...\n", envio.Round(time.Millisecond))
+	select {
+	case <-ctx.Done():
+		return res
+	case <-time.After(10 * time.Second):
+	}
+
+	despues, err := g.leerMuestras(ctx, correlator)
+	if err != nil {
+		res.registrarError("metricas")
+		return res
+	}
+
+	emitidas := delta(antes, despues, "correlator_alerts_generated_total", nil)
+	suprimidas := delta(antes, despues, "correlator_alerts_suppressed_total", nil)
+
+	fmt.Println("")
+	fmt.Println("  Resultado")
+	fmt.Printf("    incidentes lanzados     %d\n", cuantas)
+	fmt.Printf("    alertas distintas       %.0f  (de %d combinaciones posibles)\n",
+		emitidas, combinaciones)
+	fmt.Printf("    suprimidas              %.0f\n", suprimidas)
+	fmt.Println("")
+	for _, t := range tipos {
+		n := delta(antes, despues, "correlator_alerts_generated_total", etq("type", t.nombre))
+		if reparto[t.nombre] > 0 {
+			fmt.Printf("    %-24s %3.0f de %d\n", t.nombre, n, reparto[t.nombre])
+		}
+	}
+
+	fmt.Println("")
+	switch {
+	case emitidas >= float64(esperadas):
+		fmt.Printf("  Se emitio una alerta por cada combinacion zona-tipo afectada: %.0f.\n", emitidas)
+		fmt.Println("  Ningun incidente se perdio.")
+	case emitidas == 0:
+		fmt.Println("  No se emitio ninguna: TODAS quedaron suprimidas. Las zonas ya tenian")
+		fmt.Println("  una alerta vigente. Esperar a que expire ALERT_SUPPRESS_TTL (5 min")
+		fmt.Println("  por defecto) y repetir.")
+	default:
+		fmt.Printf("  Se emitieron %.0f de las %d esperadas. Si se repitio el escenario\n",
+			emitidas, esperadas)
+		fmt.Println("  hace menos de 5 minutos, el resto sigue suprimido del intento anterior.")
+	}
+
+	// Las dos cifras miden cosas distintas y conviene no confundirlas: un
+	// numero alto de supresiones aqui NO significa alertas perdidas.
+	if suprimidas > 0 {
+		fmt.Println("")
+		fmt.Println("  Las supresiones NO son incidentes perdidos. Son de dos clases:")
+		fmt.Println("    - re-disparos dentro del mismo incidente: una secuencia de cuatro")
+		fmt.Println("      eventos cumple su regla al segundo, y los dos siguientes vuelven")
+		fmt.Println("      a cumplirla;")
+		fmt.Println("    - incidentes que caen en una zona que ya tenia una alerta de ese")
+		fmt.Println("      tipo vigente.")
+		fmt.Println("  En ambos casos es lo que se busca: que un incidente en curso genere")
+		fmt.Println("  un aviso y no una cadena de avisos identicos.")
+	}
+	fmt.Println("")
+
+	return res
 }
 
 // bulk ejercita POST /events/bulk.
@@ -880,7 +1056,7 @@ func (r *resultados) imprimir() {
 	fmt.Println("\n─────────────────────────────────────────────")
 	fmt.Println("La latencia de ingesta NO es el SLO del sistema.")
 	fmt.Println("El SLO es evento -> alerta, y se mide en el correlator:")
-	fmt.Println("  curl -s http://localhost:8080/metrics | grep correlation_latency")
+	fmt.Printf("  curl -s %s/metrics | grep correlation_latency\n", urlCorrelator)
 	fmt.Println("\nVerificar que no se perdio nada:")
 	fmt.Println("  Kafka-UI  http://localhost:8081  (events.standardized y events.dlq)")
 }
@@ -918,15 +1094,40 @@ func significado(codigo int) string {
 // ---------------------------------------------------------------------------
 
 // Zonas reales de la Ciudad de Guatemala, con coordenadas aproximadas.
+// zonas son las de la Ciudad de Guatemala. La lista es fija a proposito: una
+// ciudad tiene las zonas que tiene, y un generador que invente nombres nuevos
+// en cada ejecucion ensucia las metricas, los tableros y el archivo historico
+// con zonas que no existen.
+//
+// Las coordenadas son APROXIMADAS, suficientes para situar los eventos en el
+// mapa de calor. El equipo debe sustituirlas por las oficiales antes de
+// presentar el informe, junto con el resto de datos a verificar del Anexo C.
 var zonas = []struct {
 	nombre   string
 	lat, lon float64
 }{
 	{"zona_1", 14.6407, -90.5133},
+	{"zona_2", 14.6530, -90.5160},
+	{"zona_3", 14.6480, -90.5290},
 	{"zona_4", 14.6280, -90.5220},
+	{"zona_5", 14.6330, -90.5050},
+	{"zona_6", 14.6560, -90.4950},
+	{"zona_7", 14.6200, -90.5560},
+	{"zona_8", 14.6180, -90.5340},
+	{"zona_9", 14.6050, -90.5210},
 	{"zona_10", 14.5995, -90.5130},
+	{"zona_11", 14.6030, -90.5440},
 	{"zona_12", 14.5890, -90.5450},
+	{"zona_13", 14.5830, -90.5260},
+	{"zona_14", 14.5810, -90.5090},
+	{"zona_15", 14.5900, -90.4860},
+	{"zona_16", 14.6120, -90.4620},
+	{"zona_17", 14.6450, -90.4600},
 	{"zona_18", 14.6720, -90.4710},
+	{"zona_19", 14.6630, -90.4850},
+	{"zona_21", 14.5700, -90.5330},
+	{"zona_24", 14.5620, -90.5120},
+	{"zona_25", 14.5760, -90.4960},
 }
 
 var tipos = []string{"panic.button", "sensor.lpr", "sensor.speed", "sensor.acoustic", "citizen.report"}
@@ -941,14 +1142,52 @@ func eventoAleatorio() map[string]any {
 //
 // Se omiten timestamp, trace_id, correlation_id y partition_key a proposito:
 // asi la carga ejercita tambien el enriquecedor del ingestor.
+// dentroDeLaZona dispersa un punto alrededor del centroide recibido.
+//
+// Un sensor esta en una esquina concreta, no en el centro geometrico de la
+// zona. Sin esta dispersion todos los eventos de una zona comparten
+// coordenada exacta: en el mapa caen en el mismo pixel y un panel no puede
+// distinguir una zona con un incidente de otra con treinta, porque los puntos
+// se tapan entre si. El radio es el orden de magnitud de una zona capitalina.
+//
+// La correccion por coseno de la latitud evita que la dispersion quede
+// achatada: un grado de longitud mide menos que uno de latitud, y mas cuanto
+// mas lejos del ecuador.
+func dentroDeLaZona(lat, lon float64) (float64, float64) {
+	const radio = 0.008 // grados, unos 890 m
+
+	dLat := radio * (2*fraccionAleatoria() - 1)
+	dLon := radio * (2*fraccionAleatoria() - 1) / math.Cos(lat*math.Pi/180)
+
+	return redondear(lat + dLat), redondear(lon + dLon)
+}
+
+// redondear deja seis decimales, que son unos 11 cm: mas precision seria
+// fingir una exactitud que un sensor urbano no tiene.
+func redondear(v float64) float64 {
+	return math.Round(v*1e6) / 1e6
+}
+
+// fraccionAleatoria devuelve un valor en [0,1). Usa crypto/rand porque es el
+// generador que el programa ya tiene importado para los UUID; aqui no hace
+// falta calidad criptografica, pero tampoco cuesta nada.
+func fraccionAleatoria() float64 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0.5
+	}
+	return float64(binary.BigEndian.Uint32(b[:])) / (1 << 32)
+}
+
 func evento(tipo, zona string, lat, lon float64, payload map[string]any) map[string]any {
+	plat, plon := dentroDeLaZona(lat, lon)
 	return map[string]any{
 		"event_version": "1.0",
 		"event_type":    tipo,
 		"event_id":      uuidV4(),
 		"producer":      "load-test",
 		"source":        "simulated",
-		"geo":           map[string]any{"zone": zona, "lat": lat, "lon": lon},
+		"geo":           map[string]any{"zone": zona, "lat": plat, "lon": plon},
 		"severity":      severidad(tipo),
 		"payload":       payload,
 	}

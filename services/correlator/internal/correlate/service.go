@@ -109,6 +109,9 @@ func (s *Service) Procesar(ctx context.Context, m *broker.Mensaje) error {
 	if err != nil {
 		return err
 	}
+	// El valor se actualiza aqui, pero quien saca del gauge las zonas que ya
+	// no tienen ventana es RefrescarVentanas: aqui nunca llega a cero, porque
+	// el evento que se acaba de insertar ya cuenta.
 	s.metrics.WindowSize.WithLabelValues(zona).Set(float64(len(resumenes)))
 
 	resultado := rules.Evaluar(rules.Ventana{
@@ -246,6 +249,45 @@ func (s *Service) BarrerFalsosPositivos(ctx context.Context) {
 			slog.String("zona", p.Zona),
 			slog.String("disparador", p.Disparador),
 			slog.String("faltaba", p.Faltante))
+	}
+}
+
+// RefrescarVentanas pone el gauge de tamano de ventana al dia con lo que de
+// verdad hay en Redis. Lo invoca el mismo temporizador que barre los falsos
+// positivos.
+//
+// Hace falta porque un GaugeVec conserva para siempre toda combinacion de
+// etiquetas que haya visto, y el camino normal —fijar el valor al procesar un
+// evento— solo escribe zonas que reciben trafico: una zona que deja de
+// recibirlo se queda publicando su ultimo valor indefinidamente. El panel
+// anuncia "eventos vigentes en la ventana" y estaria mostrando una cifra de
+// hace horas, ademas de acumular zonas que ya no existen.
+//
+// Reset() seguido de repoblar en la misma pasada evita el parpadeo: entre
+// ambas operaciones no hay recogida de metricas.
+func (s *Service) RefrescarVentanas(ctx context.Context) {
+	zonas, err := s.ventanas.ZonasActivas(ctx)
+	if err != nil {
+		s.log.Warn("no se pudieron listar las zonas con ventana",
+			slog.String("error", err.Error()))
+		return
+	}
+
+	tamanos := make(map[string]int64, len(zonas))
+	for _, z := range zonas {
+		n, err := s.ventanas.TamanoVentana(ctx, z)
+		if err != nil {
+			// Una zona que falla no debe impedir refrescar las demas.
+			continue
+		}
+		if n > 0 {
+			tamanos[z] = n
+		}
+	}
+
+	s.metrics.WindowSize.Reset()
+	for z, n := range tamanos {
+		s.metrics.WindowSize.WithLabelValues(z).Set(float64(n))
 	}
 }
 

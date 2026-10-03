@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.edu/ciudad-inteligente/1-0.schema.json",
+  "title": "ContratosCiudadInteligenteV1",
+  "description": "Contrato unico de Ciudad Inteligente v1.0. Reune los tres mensajes que circulan por el sistema: el evento canonico que entra por el ingestor y viaja en events.standardized, la alerta correlacionada que el correlator publica en correlated.alerts, y el mensaje de la cola de fallidos (events.dlq). La raiz valida CUALQUIERA de los tres, de modo que este archivo basta para comprobar cualquier mensaje del sistema. Cada contrato es tambien referenciable por separado a traves de $defs.",
+
+  "oneOf": [
+    { "$ref": "#/$defs/canonicalEvent" },
+    { "$ref": "#/$defs/correlatedAlert" },
+    { "$ref": "#/$defs/dlqMessage" }
+  ],
+
+  "$defs": {
+
+    "canonicalEvent": {
+      "$anchor": "canonicalEvent",
+      "title": "CanonicalEventV1",
+      "description": "Evento canonico v1.0. Es el contrato de entrada del sistema: todo productor publica en este formato y el ingestor lo valida sobre el JSON crudo, antes de deserializar, para que additionalProperties:false se aplique de verdad. Topic: events.standardized.",
+      "type": "object",
+      "required": [
+        "event_version",
+        "event_type",
+        "event_id",
+        "producer",
+        "source",
+        "timestamp",
+        "partition_key",
+        "geo",
+        "severity",
+        "payload"
+      ],
+      "properties": {
+        "event_version": {
+          "type": "string",
+          "const": "1.0",
+          "description": "Version del contrato. Un cambio incompatible exige una version nueva, no editar esta."
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "panic.button",
+            "sensor.lpr",
+            "sensor.speed",
+            "sensor.acoustic",
+            "citizen.report"
+          ],
+          "description": "Los cinco tipos de sensor urbano simulados."
+        },
+        "event_id": {
+          "type": "string",
+          "description": "Identificador unico del evento. Es la clave de deduplicacion: el ingestor lo reserva en Redis con SET NX y responde 409 si ya existia. Si el productor lo omite, el ingestor lo genera."
+        },
+        "producer": {
+          "type": "string",
+          "description": "Quien emite el evento. Permite distinguir simuladores, aplicaciones moviles y sensores fisicos."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["simulated"],
+          "description": "Origen del dato. Acotado a 'simulated' mientras no haya sensores fisicos."
+        },
+        "correlation_id": {
+          "type": "string",
+          "description": "Opcional. Agrupa eventos que pertenecen a un mismo incidente."
+        },
+        "trace_id": {
+          "type": "string",
+          "description": "Opcional. Entra por la cabecera X-Trace-Id, viaja en las cabeceras del mensaje de Kafka y aparece en el registro de los cinco servicios: un solo identificador reconstruye el recorrido completo del evento."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Momento del evento en el origen, en UTC. Es el punto de partida del SLO: la latencia de deteccion se mide desde aqui hasta la emision de la alerta."
+        },
+        "partition_key": {
+          "type": "string",
+          "description": "Clave de particion de Kafka. Debe ser la zona geografica: garantiza que los eventos de una misma zona llegan en orden al mismo consumidor, que es la propiedad de la que depende la correlacion por ventana. Si el productor la omite, el ingestor la deriva de geo.zone."
+        },
+        "geo": {
+          "type": "object",
+          "required": ["zone"],
+          "properties": {
+            "zone": {
+              "type": "string",
+              "description": "Zona municipal. Es la unidad espacial de correlacion y la clave de particion."
+            },
+            "lat": { "type": "number" },
+            "lon": { "type": "number" }
+          }
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "critical"]
+        },
+        "payload": {
+          "type": "object",
+          "description": "Carga util propia de cada tipo de sensor. Deliberadamente sin restringir en v1.0: un productor nuevo puede enviar campos adicionales sin romper el contrato. Las formas concretas que emite cada sensor estan documentadas en $defs/payloads, y los campos que el motor de correlacion realmente consume se marcan alli. Restringirlas seria un cambio de version, porque rechazaria eventos que v1.0 acepta."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "correlatedAlert": {
+      "$anchor": "correlatedAlert",
+      "title": "CorrelatedAlertV1",
+      "description": "Alerta correlacionada v1.0. Es el contrato de salida del correlator: se valida ANTES de publicarla, de modo que un cambio de forma no llegue sin control a los consumidores aguas abajo. Topic: correlated.alerts. Tabla: alerts.",
+      "type": "object",
+      "required": [
+        "alert_id",
+        "type",
+        "score",
+        "zone",
+        "window",
+        "evidence",
+        "created_at"
+      ],
+      "properties": {
+        "alert_id": { "type": "string", "format": "uuid" },
+        "correlation_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Opcional. Enlaza la alerta con el incidente al que pertenece."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "possible_robbery",
+            "accident",
+            "fire",
+            "traffic_speed_violation"
+          ],
+          "description": "Los cuatro tipos de alerta que el motor de reglas puede emitir."
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confianza de la correlacion. NO redondear a entero: declararlo entero guardaria 0.85, 0.90 y 0.95 los tres como 1 y borraria la gradacion entre reglas. La columna alerts.score es numeric, con CHECK (score >= 0 AND score <= 1). Valores por regla: possible_robbery 0.85, accident 0.85 (0.95 con caida de velocidad confirmada), fire 0.95, traffic_speed_violation 0.90."
+        },
+        "zone": {
+          "type": "string",
+          "description": "Zona donde se detecto el incidente."
+        },
+        "window": {
+          "type": "object",
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "type": "string", "format": "date-time" },
+            "end": { "type": "string", "format": "date-time" }
+          },
+          "additionalProperties": false,
+          "description": "Intervalo temporal de los eventos que sustentan la alerta."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "event_id de cada evento que sustenta la alerta. Permite reconstruir el incidente y auditar una deteccion cuestionada."
+        },
+        "created_at": { "type": "string", "format": "date-time" },
+        "rule_version": {
+          "type": "string",
+          "description": "Version del conjunto de reglas que produjo la alerta. Permite auditar con que umbrales se genero cada alerta cuando las reglas se ajustan por variable de entorno."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "dlqMessage": {
+      "$anchor": "dlqMessage",
+      "title": "DeadLetterMessageV1",
+      "description": "Mensaje de la cola de fallidos. El enunciado exige tratar explicitamente las colas de mensajes muertos (seccion 4.2). Conserva el payload original intacto para poder reprocesarlo: descartar en silencio lo que falla haria imposible saber despues que se perdio. Topic: events.dlq, retencion 14 dias.",
+      "type": "object",
+      "required": ["service", "reason", "failed_at", "original_payload"],
+      "properties": {
+        "service": {
+          "type": "string",
+          "enum": ["ingestor", "correlator", "persister", "indexer"],
+          "description": "Servicio que no pudo procesar el mensaje."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Motivo de la falla, en forma de codigo estable: contrato, json_invalido, persistencia, kafka, elasticsearch."
+        },
+        "detail": {
+          "description": "Opcional. Detalle estructurado del error, por ejemplo la lista de campos que incumplen el contrato."
+        },
+        "trace_id": {
+          "type": "string",
+          "description": "Opcional. Permite seguir el mensaje fallido por el registro de los cinco servicios."
+        },
+        "partition": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Solo en fallos de consumidores. Junto con offset, permite localizar el mensaje original en el topic."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Solo en fallos de consumidores."
+        },
+        "failed_at": { "type": "string", "format": "date-time" },
+        "original_payload": {
+          "description": "El mensaje original, sin transformar. Es lo que permite reprocesarlo."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "payloads": {
+      "$comment": "DOCUMENTACION, NO VALIDACION. Estas formas describen lo que envia cada tipo de sensor. El contrato v1.0 no las impone: payload es un objeto abierto, de modo que un productor pueda anadir campos sin romper nada. Aplicarlas seria un cambio de version porque rechazaria eventos que v1.0 acepta hoy. Los campos marcados como consumidos por el motor son los unicos de los que depende la correlacion; el resto viaja, se archiva y se indexa, pero no produce inferencia.",
+
+      "panicButton": {
+        "title": "Payload de panic.button",
+        "type": "object",
+        "properties": {
+          "tipo_de_alerta": {
+            "type": "string",
+            "examples": ["panico", "emergencia", "incendio"]
+          },
+          "identificador_dispositivo": { "type": "string" },
+          "user_context": {
+            "type": "string",
+            "description": "Contexto del ciudadano que pulsa, por ejemplo si viene de la aplicacion movil."
+          }
+        },
+        "$comment": "El motor no lee ningun campo de este payload: la sola presencia de un panic.button en la ventana dispara la evaluacion de possible_robbery."
+      },
+
+      "sensorLpr": {
+        "title": "Payload de sensor.lpr (camara de lectura de placas)",
+        "type": "object",
+        "properties": {
+          "placa_vehicular": {
+            "type": "string",
+            "description": "DATO PERSONAL. Se sustituye por un seudonimo HMAC-SHA256 antes de cruzar hacia la nube, en el persister y en el indexer, que usan la misma llave. La llave se custodia on-premise y nunca se versiona."
+          },
+          "velocidad_estimada": {
+            "type": "number",
+            "description": "CONSUMIDO POR EL MOTOR. Por encima de 80 km/h el vehiculo cuenta como 'a alta velocidad' para possible_robbery y traffic_speed_violation. La transicion de mas de 80 a menos de 40 entre lecturas consecutivas es la caida que refuerza accident."
+          },
+          "modelo_vehiculo": { "type": "string" },
+          "color_vehiculo": { "type": "string" },
+          "ubicacion_sensor": { "type": "string" }
+        }
+      },
+
+      "sensorSpeed": {
+        "title": "Payload de sensor.speed",
+        "type": "object",
+        "properties": {
+          "velocidad_detectada": {
+            "type": "number",
+            "description": "CONSUMIDO POR EL MOTOR. Equivale a velocidad_estimada: la regla de posible robo acepta la senal de velocidad de ambas fuentes. Consultar solo las camaras dejaria este sensor como una senal que entra al sistema y no produce ninguna inferencia."
+          },
+          "sensor_id": { "type": "string" },
+          "direccion": {
+            "type": "string",
+            "description": "Orientacion del movimiento.",
+            "examples": ["NORTE", "SUR", "ESTE", "OESTE"]
+          }
+        }
+      },
+
+      "sensorAcoustic": {
+        "title": "Payload de sensor.acoustic",
+        "type": "object",
+        "properties": {
+          "tipo_sonido_detectado": {
+            "type": "string",
+            "description": "CONSUMIDO POR EL MOTOR. 'explosion' y 'vidrio_roto' sustentan accident; 'explosion' sustenta ademas fire.",
+            "examples": ["disparo", "explosion", "vidrio_roto"]
+          },
+          "nivel_decibeles": {
+            "type": "number",
+            "description": "CONSUMIDO POR EL MOTOR. Por encima de 100 dB la senal vale por si sola como evidencia de incendio, aunque el clasificador no la haya etiquetado como explosion."
+          },
+          "probabilidad_evento_critico": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      },
+
+      "citizenReport": {
+        "title": "Payload de citizen.report",
+        "type": "object",
+        "properties": {
+          "tipo_evento": {
+            "type": "string",
+            "description": "CONSUMIDO POR EL MOTOR. 'accidente' dispara la evaluacion de accident; 'incendio', la de fire.",
+            "examples": ["accidente", "incendio", "altercado"]
+          },
+          "mensaje_descriptivo": { "type": "string" },
+          "ubicacion_aproximada": { "type": "string" },
+          "origen": {
+            "type": "string",
+            "examples": ["usuario", "app", "punto_fisico"]
+          }
+        }
+      }
+    }
+  }
+}

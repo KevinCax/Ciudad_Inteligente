@@ -139,7 +139,15 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      # Solo cambia el puerto del HOST. Dentro de la red de Docker el
+      # correlator sigue escuchando en 8080, de modo que Prometheus y los
+      # demas servicios no se enteran de esto.
+      #
+      # Se publica en 8001 y no en 8080 por dos razones: 8080 es el puerto por
+      # defecto de media industria y suele estar ocupado en las maquinas de
+      # desarrollo, y asi los cinco microservicios quedan en serie —ingestor
+      # 8000, correlator 8001, persister 8002, indexer 8003, jobs 8004.
+      - "${CORRELATOR_HOST_PORT:-8001}:8080"
     environment:
       SERVER_PORT: 8080
       KAFKA_BROKERS: kafka:29092
@@ -318,6 +326,10 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # Registro de peticiones: por defecto Grafana solo anota los
+      # errores, de modo que al diagnosticar un panel vacio no se ve
+      # ninguna consulta y parece que el navegador no pide nada.
+      GF_SERVER_ROUTER_LOGGING: "${GF_ROUTER_LOGGING:-false}"
       # datasources.yml interpola estas variables leyendo el entorno del
       # CONTENEDOR, no el .env de compose. Sin pasarlas aqui, Grafana provisiona
       # la fuente de PostgreSQL con usuario y base vacios y el tablero de

@@ -189,6 +189,7 @@ func run() error {
 				return
 			case <-t.C:
 				servicio.BarrerFalsosPositivos(ctx)
+				servicio.RefrescarVentanas(ctx)
 			}
 		}
 	}()

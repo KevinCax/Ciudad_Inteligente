@@ -88,6 +88,68 @@ case "${1:-help}" in
     docker compose -f deploy/docker-compose.cloud.yml                    --env-file deploy/.env up -d
     ;;
 
+  estado)
+    # Responde de un vistazo "¿esta todo listo?".
+    #
+    # Existe porque el indexer tarda en arrancar: depende de Elasticsearch, que
+    # necesita cerca de minuto y medio, y hasta entonces se cae y Docker lo
+    # reintenta. Visto en un tablero parece averiado cuando solo esta
+    # esperando, y sin algo asi no hay forma rapida de distinguirlo.
+    echo "Servicios"
+    # El "|| true" de cada sustitucion no es decorativo: el script corre con
+    # set -e, y un servicio caido hace que curl salga con 7. Sin eso, la
+    # comprobacion se mata justo en el primer servicio con problemas, que es
+    # exactamente cuando hace falta ver el resto.
+    salud () {
+      printf "  %-12s " "$1"
+      codigo=$(curl -s -o /dev/null -m 3 -w "%{http_code}" "$2" 2>/dev/null || true)
+      if [ "$codigo" = "200" ]; then
+        echo "listo"
+      else
+        reinicios=$(docker inspect "ciudad-$1" --format '{{.RestartCount}}' 2>/dev/null || true)
+        estado=$(docker inspect "ciudad-$1" --format '{{.State.Status}}' 2>/dev/null || true)
+        if [ -z "$estado" ]; then
+          echo "NO EXISTE el contenedor      -> ./make.sh up"
+        elif [ "$estado" != "running" ]; then
+          echo "contenedor $estado"
+        else
+          echo "arrancando (HTTP ${codigo:-sin respuesta}, ${reinicios:-0} reintentos)"
+        fi
+      fi
+    }
+    salud ingestor   http://localhost:8000/events/health
+    puerto_corr=$(grep -E '^CORRELATOR_HOST_PORT=' deploy/.env 2>/dev/null | cut -d= -f2- || true)
+    salud correlator "http://localhost:${puerto_corr:-8001}/health"
+    salud persister  http://localhost:8002/health
+    salud indexer    http://localhost:8003/health
+    salud jobs       http://localhost:8004/health
+
+    echo ""
+    echo "Infraestructura"
+    infra () {
+      printf "  %-14s " "$1"
+      if curl -s -o /dev/null -m 3 "$2" 2>/dev/null; then echo "listo"; else echo "no responde"; fi
+    }
+    infra elasticsearch http://localhost:9200/_cluster/health
+    infra prometheus    http://localhost:9090/-/ready
+    infra grafana       http://localhost:3000/api/health
+    infra kibana        http://localhost:5601/api/status
+
+    echo ""
+    echo "Lo que ve Prometheus"
+    curl -s -m 3 http://localhost:9090/api/v1/targets 2>/dev/null | python -c "
+import json,sys
+try: d=json.load(sys.stdin)['data']['activeTargets']
+except Exception: print('  Prometheus no responde todavia'); raise SystemExit
+caidos=[t['labels'].get('job') for t in d if t['health']!='up']
+print('  %d de %d objetivos activos%s' % (len(d)-len(caidos), len(d),
+      '' if not caidos else '   caidos: '+', '.join(caidos)))
+" 2>/dev/null || echo "  Prometheus no responde todavia"
+    echo ""
+    echo "Si algo sale 'arrancando', esperar 30 s y repetir. Elasticsearch"
+    echo "tarda cerca de minuto y medio, y el indexer no arranca sin el."
+    ;;
+
   down)
     docker compose -f deploy/docker-compose.cloud.yml down 2>/dev/null || true
     docker compose -f deploy/docker-compose.edge.yml                    -f deploy/docker-compose.dev.yml down
@@ -103,7 +165,13 @@ case "${1:-help}" in
     #   ./make.sh load alertas
     #   ./make.sh load bulk
     #   ./make.sh load enunciado
-    ( cd test/load && "$GO" run . -escenario "${2:-sostenido}" )
+    #   ./make.sh load tormenta        (100 alertas a la vez)
+    #   ./make.sh load tormenta 250    (el tercer argumento cambia la cantidad)
+    # La clave del ingestor se lee de deploy/.env para que los escenarios
+    # sigan funcionando con la autenticacion activada. Sin esto, activar la
+    # clave rompe todas las pruebas de carga y no es evidente por que.
+    CLAVE=$(grep -E '^INGESTOR_API_KEY=' deploy/.env 2>/dev/null | cut -d= -f2-)
+    ( cd test/load && "$GO" run . -escenario "${2:-sostenido}" -api-key "$CLAVE" ${3:+-alertas "$3"} )
     ;;
 
   config)
@@ -127,8 +195,8 @@ case "${1:-help}" in
     sed -n '4,6p' "$0"
     echo ""
     echo "Codigo:      sync-contracts check-contracts tidy fmt vet test build docker check"
-    echo "Despliegue:  up up-cloud down logs config"
+    echo "Despliegue:  up up-cloud estado down logs config"
     echo "Documentos:  adr"
-    echo "Pruebas:     load [sostenido|rafaga|alertas|bulk|enunciado]"
+    echo "Pruebas:     load [sostenido|rafaga|alertas|bulk|enunciado|tormenta [N]]"
     ;;
 esac
