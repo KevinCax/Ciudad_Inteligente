@@ -14,8 +14,17 @@ import (
 // Prefijos de las claves. Llevan el proposito en el nombre para que un
 // SCAN sobre Redis sea legible sin consultar el codigo.
 const (
-	prefijoVisto     = "corr:seen:"
-	prefijoZona      = "corr:zone:"
+	prefijoVisto = "corr:seen:"
+	prefijoZona  = "corr:zone:"
+
+	// La ventana de vehiculo se indexa por el SEUDONIMO de la placa, no por
+	// la placa en claro. Dos razones. Un SCAN sobre Redis mostraria si no el
+	// listado de matriculas que han circulado, convirtiendo el estado
+	// transitorio de la correlacion en un fichero de vehiculos. Y el
+	// seudonimo es el mismo que se archiva en PostgreSQL, de modo que una
+	// alerta de persecucion se puede cruzar con el historico del vehiculo sin
+	// que la placa en claro salga nunca de la LAN.
+	prefijoVehiculo  = "corr:plate:"
 	prefijoSupresion = "alert:fired:"
 	prefijoActivas   = "alerts:active:"
 )
@@ -27,6 +36,7 @@ type Store struct {
 	ttlVentana   time.Duration
 	ttlSupresion time.Duration
 	ttlActivas   time.Duration
+	ttlVehiculo  time.Duration
 }
 
 // Opciones de construccion del Store.
@@ -37,6 +47,11 @@ type Opciones struct {
 	TTLVisto     time.Duration
 	TTLVentana   time.Duration
 	TTLSupresion time.Duration
+
+	// TTLVehiculo es mayor que TTLVentana a proposito: un vehiculo que huye
+	// recorre varias zonas y la cadena de infracciones se extiende mas que
+	// cualquier ventana de zona.
+	TTLVehiculo time.Duration
 }
 
 // New abre la conexion a Redis y verifica que responda.
@@ -64,6 +79,7 @@ func New(ctx context.Context, o Opciones) (*Store, error) {
 		ttlVentana:   o.TTLVentana,
 		ttlSupresion: o.TTLSupresion,
 		ttlActivas:   o.TTLVentana,
+		ttlVehiculo:  o.TTLVehiculo,
 	}, nil
 }
 
@@ -84,6 +100,14 @@ type Resumen struct {
 	Timestamp string         `json:"timestamp"`
 	Zone      string         `json:"zone"`
 	Payload   map[string]any `json:"payload,omitempty"`
+
+	// Lat y Lon son punteros porque 0.0 es una coordenada valida: con float64
+	// y omitempty, un punto en el ecuador o en Greenwich se perderia al
+	// serializar. Un resumen anterior a este campo los trae nulos, y el motor
+	// debe tratar eso como "se desconoce", no como "esta en el golfo de
+	// Guinea".
+	Lat *float64 `json:"lat,omitempty"`
+	Lon *float64 `json:"lon,omitempty"`
 }
 
 // Momento parsea el timestamp del resumen.
@@ -146,12 +170,24 @@ func (s *Store) AgregarEvento(ctx context.Context, r *Resumen, momento time.Time
 
 // EventosEnVentana devuelve los eventos de una zona entre dos instantes.
 func (s *Store) EventosEnVentana(ctx context.Context, zona string, desde, hasta time.Time) ([]Resumen, error) {
-	crudos, err := s.rdb.ZRangeByScore(ctx, prefijoZona+zona, &redis.ZRangeBy{
+	return s.leerVentana(ctx, prefijoZona+zona, desde, hasta, "de "+zona)
+}
+
+// leerVentana lee un rango temporal de un sorted set de resumenes.
+//
+// La comparten la ventana de zona y la de vehiculo porque son la misma
+// estructura con distinta clave: duplicar la lectura habria duplicado tambien
+// el criterio de descarte de resumenes corruptos, que es el que decide si un
+// dato ilegible detiene la correlacion o solo se omite.
+func (s *Store) leerVentana(ctx context.Context, clave string, desde, hasta time.Time,
+	queVentana string) ([]Resumen, error) {
+
+	crudos, err := s.rdb.ZRangeByScore(ctx, clave, &redis.ZRangeBy{
 		Min: fmt.Sprintf("%d", desde.UnixMilli()),
 		Max: fmt.Sprintf("%d", hasta.UnixMilli()),
 	}).Result()
 	if err != nil {
-		return nil, fmt.Errorf("no se pudo leer la ventana de %s: %w", zona, err)
+		return nil, fmt.Errorf("no se pudo leer la ventana %s: %w", queVentana, err)
 	}
 
 	resumenes := make([]Resumen, 0, len(crudos))
@@ -164,6 +200,47 @@ func (s *Store) EventosEnVentana(ctx context.Context, zona string, desde, hasta 
 		resumenes = append(resumenes, r)
 	}
 	return resumenes, nil
+}
+
+// AgregarEventoVehiculo inserta el resumen en la ventana de un vehiculo.
+//
+// Es una segunda ventana, paralela a la de zona y con la misma forma. La de
+// zona responde "que ha pasado aqui"; esta responde "por donde ha pasado este
+// vehiculo", que es una pregunta que la de zona no puede contestar: un coche
+// que huye cambia de zona justamente para dejar de aparecer en ella.
+//
+// token es el seudonimo HMAC de la placa, nunca la placa en claro.
+func (s *Store) AgregarEventoVehiculo(ctx context.Context, token string, r *Resumen, momento time.Time) error {
+	if token == "" {
+		return nil
+	}
+
+	crudo, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("no se pudo serializar el resumen: %w", err)
+	}
+
+	clave := prefijoVehiculo + token
+	limite := momento.Add(-s.ttlVehiculo).UnixMilli()
+
+	pipe := s.rdb.TxPipeline()
+	pipe.ZAdd(ctx, clave, redis.Z{Score: float64(momento.UnixMilli()), Member: crudo})
+	pipe.ZRemRangeByScore(ctx, clave, "-inf", fmt.Sprintf("(%d", limite))
+	pipe.Expire(ctx, clave, s.ttlVehiculo*2)
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("no se pudo agregar el evento a la ventana del vehiculo: %w", err)
+	}
+	return nil
+}
+
+// EventosDeVehiculo devuelve las apariciones de un vehiculo entre dos
+// instantes, en cualquier zona.
+func (s *Store) EventosDeVehiculo(ctx context.Context, token string, desde, hasta time.Time) ([]Resumen, error) {
+	if token == "" {
+		return nil, nil
+	}
+	return s.leerVentana(ctx, prefijoVehiculo+token, desde, hasta, "del vehiculo")
 }
 
 // TamanoVentana devuelve cuantos eventos hay vigentes en una zona.

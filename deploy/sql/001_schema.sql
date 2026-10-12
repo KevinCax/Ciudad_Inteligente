@@ -21,8 +21,12 @@ CREATE TABLE IF NOT EXISTS events (
   geo_lat         numeric,
   geo_lon         numeric,
   severity        text,
-  -- El payload llega con la placa ya tokenizada: el ingestor la convierte en
-  -- un seudonimo HMAC antes de persistirla, porque esta base esta en la nube.
+  -- El payload llega con la placa ya tokenizada: el persister la convierte en
+  -- un seudonimo HMAC justo antes de escribirla, porque esta base esta en la
+  -- nube. La tokenizacion NO la hace el ingestor: la placa viaja en claro por
+  -- la LAN (Kafka y Redis) para que la correlacion pueda usarla, y se sustituye
+  -- en los dos servicios que cruzan a la nube, persister e indexer, con la
+  -- misma PLATE_HMAC_KEY para que el seudonimo coincida en ambos destinos.
   payload         jsonb NOT NULL
 );
 

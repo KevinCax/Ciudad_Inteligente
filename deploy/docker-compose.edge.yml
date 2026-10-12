@@ -159,8 +159,21 @@ services:
       REDIS_ADDR: redis:6379
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es obligatoria}
       CORRELATION_SEEN_TTL: ${CORRELATION_SEEN_TTL:-10m}
-      CORRELATION_WINDOW_TTL: ${CORRELATION_WINDOW_TTL:-10m}
+      CORRELATION_WINDOW_TTL: ${CORRELATION_WINDOW_TTL:-15m}
       ALERT_SUPPRESS_TTL: ${ALERT_SUPPRESS_TTL:-5m}
+      # Ventana indexada por vehiculo, para la regla de persecucion. Es mayor
+      # que la de zona porque un coche que huye cruza varias zonas.
+      VEHICLE_WINDOW_TTL: ${VEHICLE_WINDOW_TTL:-30m}
+      # Techo de CREDIBILIDAD, no limite de velocidad: por encima de esta
+      # media entre dos apariciones, el enlace se descarta por imposible. Un
+      # salto asi suele ser una placa mal leida o clonada, no un coche rapido.
+      RULE_VELOCIDAD_MAXIMA_PLAUSIBLE: ${RULE_VELOCIDAD_MAXIMA_PLAUSIBLE:-70}
+      # La MISMA llave que persister e indexer. Aqui no protege ningun dato que
+      # el correlator escriba —no escribe placas en ningun sitio— sino que
+      # garantiza que el seudonimo con el que indexa la ventana de vehiculo sea
+      # identico al archivado en la nube. Si difirieran, una alerta de
+      # persecucion no se podria cruzar con el historico del coche.
+      PLATE_HMAC_KEY: ${PLATE_HMAC_KEY:-}
       RULE_VERSION: ${RULE_VERSION:-1.0}
       API_TOKEN: ${CORRELATOR_API_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -243,6 +256,81 @@ services:
     networks: [ciudad_lan]
     restart: unless-stopped
 
+  # Avisa a los organismos de respuesta y deja constancia de a quien se aviso.
+  #
+  # Consume correlated.alerts y escribe en la tabla notifications. Es un
+  # servicio aparte y no un campo de la alerta porque el aviso tiene ciclo de
+  # vida propio —se crea, se entrega, falla, se reintenta— mientras que la
+  # alerta es un hecho inmutable, y porque una alerta avisa a varios organismos.
+  #
+  # ATENCION: el canal por defecto es SIMULADO. Registra la decision de
+  # despacho y permite demostrar la trazabilidad completa, pero no existe
+  # integracion con bomberos, policia ni ambulancias: nadie acude.
+  notifier:
+    build:
+      context: ../services/notifier
+      dockerfile: Dockerfile
+    image: ciudad-inteligente/notifier:latest
+    container_name: ciudad-notifier
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8005:8005"
+    environment:
+      SERVER_PORT: 8005
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC_ALERTS: correlated.alerts
+      KAFKA_TOPIC_DLQ: events.dlq
+      KAFKA_CONSUMER_GROUP: ${NOTIFIER_CONSUMER_GROUP:-notifier}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es obligatoria}
+      NOTIFIER_CANAL: ${NOTIFIER_CANAL:-simulado}
+      NOTIFIER_WEBHOOK_URL: ${NOTIFIER_WEBHOOK_URL:-}
+      # La matriz de despacho se puede ajustar sin recompilar. Sin valor, rige
+      # la de fabrica; el servicio registra en el arranque cual esta aplicando.
+      DISPATCH_FIRE: ${DISPATCH_FIRE:-}
+      DISPATCH_ACCIDENT: ${DISPATCH_ACCIDENT:-}
+      DISPATCH_POSSIBLE_ROBBERY: ${DISPATCH_POSSIBLE_ROBBERY:-}
+      DISPATCH_TRAFFIC_SPEED_VIOLATION: ${DISPATCH_TRAFFIC_SPEED_VIOLATION:-}
+      DISPATCH_VEHICLE_PURSUIT: ${DISPATCH_VEHICLE_PURSUIT:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    healthcheck:
+      disable: true
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
+  # Motor de rutas por calle. Traduce una lista de puntos donde una camara vio
+  # un vehiculo en el camino mas probable entre ellos, para dibujarlo sobre el
+  # mapa en lugar de unir los puntos con lineas rectas.
+  #
+  # Vive en la capa de BORDE, no en la nube, por el mismo motivo que el
+  # correlator: el ADR-001 sostiene que el sistema no depende del enlace a
+  # internet. Un servicio de rutas remoto habria convertido el mapa de
+  # incidentes en una pantalla que deja de funcionar cuando se cae la conexion,
+  # y ademas habria enviado las coordenadas de cada incidente a un tercero.
+  #
+  # Los datos del mapa los prepara "./make.sh rutas-preparar" UNA vez. No se
+  # hace en el arranque: son 131 MB de descarga y varios minutos de calculo, y
+  # meterlos en "up" haria que levantar el sistema para una demostracion
+  # dependiera de la red.
+  osrm:
+    image: osrm/osrm-backend:latest
+    container_name: ciudad-osrm
+    command: osrm-routed --algorithm mld /data/guatemala-latest.osrm
+    volumes:
+      - ./osrm-data:/data:ro
+    ports:
+      # 5001 en el host y no 5000: ese puerto lo ocupan con frecuencia otros
+      # programas en Windows. Dentro de la red de Docker sigue siendo 5000, que
+      # es por donde lo consulta jobs.
+      - "${OSRM_HOST_PORT:-5001}:5000"
+    healthcheck:
+      disable: true
+    networks: [ciudad_lan]
+    restart: unless-stopped
+
   # Tareas periodicas: agregados diarios y retencion del historico.
   # Sustituye a Airflow (ADR-009): duerme casi todo el tiempo y despierta dos
   # veces al dia. El cerrojo en Redis garantiza una ejecucion aunque haya
@@ -270,6 +358,10 @@ services:
       RETENCION_DIAS_COORDENADAS: ${RETENCION_DIAS_COORDENADAS:-365}
       RETENCION_DIAS_BORRADO: ${RETENCION_DIAS_BORRADO:-730}
       RETENCION_MESES_INDICES: ${RETENCION_MESES_INDICES:-12}
+      # Motor de rutas, para el recorrido por calles de las alertas.
+      OSRM_URL: ${OSRM_URL:-http://osrm:5000}
+      INTERVALO_RUTAS: ${INTERVALO_RUTAS:-1m}
+      RUTAS_HORAS_ATRAS: ${RUTAS_HORAS_ATRAS:-48}
       API_TOKEN: ${JOBS_API_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: json

@@ -10,7 +10,8 @@
     "correlation_id": {"type":"string","format":"uuid"},
     "type": {
       "type":"string",
-      "enum":["possible_robbery","accident","fire","traffic_speed_violation"]
+      "enum":["possible_robbery","accident","fire","traffic_speed_violation",
+        "vehicle_pursuit"]
     },
     "score": {
       "type":"number",

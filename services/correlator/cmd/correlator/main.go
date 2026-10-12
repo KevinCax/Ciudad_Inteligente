@@ -23,6 +23,7 @@ import (
 	"ciudadinteligente/correlator/internal/correlate"
 	"ciudadinteligente/correlator/internal/httpapi"
 	"ciudadinteligente/correlator/internal/obs"
+	"ciudadinteligente/correlator/internal/privacy"
 	"ciudadinteligente/correlator/internal/rules"
 	"ciudadinteligente/correlator/internal/store"
 	"ciudadinteligente/correlator/internal/window"
@@ -64,6 +65,32 @@ func run() error {
 		return err
 	}
 
+	// La regla de persecucion se ancla en un boton de panico, y los botones de
+	// panico viven en la ventana de ZONA. Si la ventana de persecucion mirase
+	// mas atras que ella, buscaria eventos que Redis ya podo: la regla dejaria
+	// de disparar en silencio, que es la forma mas cara de fallar. Antes que
+	// arrancar con una regla muerta, no se arranca.
+	if reglas.VentanaPersecucion > cfg.WindowTTL {
+		return fmt.Errorf(
+			"RULE_VENTANA_PERSECUCION (%s) no puede superar CORRELATION_WINDOW_TTL (%s): "+
+				"el boton de panico que ancla la regla vive en la ventana de zona y ya estaria podado",
+			reglas.VentanaPersecucion, cfg.WindowTTL)
+	}
+	if cfg.VehicleWindowTTL < reglas.VentanaPersecucion {
+		return fmt.Errorf(
+			"VEHICLE_WINDOW_TTL (%s) no puede ser menor que RULE_VENTANA_PERSECUCION (%s): "+
+				"la ventana del vehiculo se podaria antes de completar la cadena",
+			cfg.VehicleWindowTTL, reglas.VentanaPersecucion)
+	}
+
+	tokenizador := privacy.NewTokenizador(cfg.PlateHMACKey)
+	if !tokenizador.Activo() {
+		// Sin llave, la ventana de vehiculo se indexa por la placa en claro.
+		// Funciona, pero convierte el estado transitorio de Redis en un
+		// listado de matriculas legible con un SCAN.
+		log.Warn("PLATE_HMAC_KEY no configurada: la ventana de vehiculo se indexara por la placa en claro")
+	}
+
 	log.Info("configuracion cargada",
 		slog.String("env", cfg.Env),
 		slog.String("puerto", cfg.Port),
@@ -76,6 +103,7 @@ func run() error {
 		slog.String("redis", cfg.RedisAddr),
 		slog.Duration("ttl_idempotencia", cfg.SeenTTL),
 		slog.Duration("ttl_ventana", cfg.WindowTTL),
+		slog.Duration("ttl_ventana_vehiculo", cfg.VehicleWindowTTL),
 		slog.Duration("ttl_supresion_alertas", cfg.AlertSuppressTTL),
 		slog.String("rule_version", cfg.RuleVersion),
 		slog.Bool("auth_habilitada", cfg.AuthEnabled()),
@@ -95,6 +123,7 @@ func run() error {
 		TTLVisto:     cfg.SeenTTL,
 		TTLVentana:   cfg.WindowTTL,
 		TTLSupresion: cfg.AlertSuppressTTL,
+		TTLVehiculo:  cfg.VehicleWindowTTL,
 	})
 	if err != nil {
 		return fmt.Errorf("redis: %w", err)
@@ -132,7 +161,7 @@ func run() error {
 		}
 	}()
 
-	servicio := correlate.New(ventanas, publicador, validador, reglas, metrics, log)
+	servicio := correlate.New(ventanas, publicador, validador, tokenizador, reglas, metrics, log)
 
 	api := httpapi.NewAPI(ventanas, almacen, log, salud(ventanas, almacen, publicador, cfg))
 

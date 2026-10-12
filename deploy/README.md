@@ -55,6 +55,67 @@ La red `ciudad_lan` la crea el compose de edge; el de nube se conecta a ella com
 | Elasticsearch | http://localhost:9200 | |
 | Kibana | http://localhost:5601 | |
 
+## Recorridos por calle (OSRM)
+
+El mapa de trazabilidad dibuja el recorrido de un incidente siguiendo las
+calles en lugar de unir los puntos con rectas. Lo calcula un motor de rutas que
+vive en la capa de borde, por el mismo motivo que el correlator: el sistema no
+debe depender del enlace a internet, y pedir rutas a un servicio externo
+significaria ademas enviarle las coordenadas de cada incidente.
+
+Antes de levantarlo hay que preparar el mapa **una vez**:
+
+```bash
+./make.sh rutas-preparar
+```
+
+Descarga el extracto de Guatemala de OpenStreetMap (unos 131 MB) y construye
+los indices. Tarda varios minutos y es idempotente: si ya estan, no hace nada.
+Los datos quedan en `deploy/osrm-data`, que esta en `.gitignore`.
+
+No forma parte de `up` a proposito: meterlo en el arranque haria que levantar el
+sistema para una demostracion dependiera de poder descargar 131 MB.
+
+Despues, el servicio arranca con el resto. El recorrido lo calcula `jobs` cada
+minuto para las alertas recientes y lo guarda en `alert_routes`.
+
+**Importante al explicarlo:** el sistema NO sabe por donde circulo el vehiculo.
+Sabe donde lo vieron las camaras. La linea es el camino mas probable entre esos
+puntos, calculado por el motor de rutas; los puntos son lo medido. Ver
+[ADR-012](../docs/adr/012-recorridos-por-calle.md).
+
+## Esquema de la base
+
+El esquema vive en `deploy/sql/`, numerado: `001_schema.sql` crea las tablas de
+eventos, alertas y agregados; `002_trazabilidad.sql` añade `notifications` y
+los índices del rastreo por vehículo.
+
+En desarrollo los aplica el contenedor `postgres-migrate`, que corre en cada
+`up`, ejecuta todos los archivos en orden y termina. Los servicios que escriben
+en la base esperan a que haya terminado, no solo a que PostgreSQL acepte
+conexiones: que la base responda no significa que las tablas existan.
+
+Hace falta porque `docker-entrypoint-initdb.d` **solo se ejecuta la primera vez
+que se inicializa el volumen**. Sin este contenedor, añadir una tabla obligaría
+a borrar el volumen y perder los datos, que es exactamente lo que no se puede
+hacer a mitad de una demostración. Todos los scripts llevan `IF NOT EXISTS`, de
+modo que reaplicarlos es inocuo.
+
+Si una migración falla, el arranque se detiene (`ON_ERROR_STOP=1`): vale más
+eso que dejar el esquema a medio aplicar y descubrirlo después como una columna
+que no existe.
+
+**En producción la base es gestionada y no está en ningún compose**, así que no
+hay quien ejecute los scripts. Hay que aplicarlos a mano al desplegar una
+versión que cambie el esquema:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/sql/001_schema.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/sql/002_trazabilidad.sql
+```
+
+Son idempotentes: ejecutarlos sobre una base ya poblada no cambia nada.
+
 ## Kafka en modo KRaft
 
 Kafka corre **sin Zookeeper**. Es un componente menos que operar y monitorear, lo que pesa cuando el equipo de sistemas del cliente es pequeño; además Zookeeper quedó deprecado en Kafka 3.x y eliminado en 4.0, así que mantenerlo sería heredar deuda desde el primer día.

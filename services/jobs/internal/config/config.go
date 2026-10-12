@@ -29,7 +29,15 @@ type Config struct {
 
 	// Horarios
 	HoraAgregados string
-	HoraRetencion string
+
+	// Recorridos por calle de las alertas (ADR-012).
+	OSRMURL          string
+	OSRMTimeout      time.Duration
+	IntervaloRutas   time.Duration
+	RutasHorasAtras  int
+	RutasMaxIntentos int
+	RutasPorPasada   int
+	HoraRetencion    string
 
 	// Politica de retencion (ADR-007)
 	DiasPlaca       int
@@ -62,7 +70,26 @@ func Load() (*Config, error) {
 		// Los agregados corren ANTES que la retencion a proposito: si la purga
 		// borrara los eventos primero, el resumen del dia saldria incompleto.
 		HoraAgregados: env("HORA_AGREGADOS", "03:00"),
-		HoraRetencion: env("HORA_RETENCION", "03:30"),
+
+		OSRMURL:     env("OSRM_URL", "http://osrm:5000"),
+		OSRMTimeout: envDuration("OSRM_TIMEOUT", 10*time.Second),
+
+		// Cada minuto: el recorrido se mira en vivo, no en el informe del dia.
+		IntervaloRutas: envDuration("INTERVALO_RUTAS", time.Minute),
+
+		// Solo las alertas recientes. Calcular el recorrido de un incidente de
+		// hace tres semanas no lo mira nadie y ocuparia las pasadas que
+		// necesitan las alertas en curso.
+		RutasHorasAtras: envInt("RUTAS_HORAS_ATRAS", 48),
+
+		// Tres intentos y se deja: si el motor de rutas lleva tres minutos sin
+		// responder, el problema no se arregla reintentando.
+		RutasMaxIntentos: envInt("RUTAS_MAX_INTENTOS", 3),
+
+		// Tope por pasada, para que un atraso acumulado no convierta un tic de
+		// un minuto en una tarea de media hora que bloquee a las siguientes.
+		RutasPorPasada: envInt("RUTAS_POR_PASADA", 50),
+		HoraRetencion:  env("HORA_RETENCION", "03:30"),
 
 		DiasPlaca:       envInt("RETENCION_DIAS_PLACA", 90),
 		DiasCoordenadas: envInt("RETENCION_DIAS_COORDENADAS", 365),

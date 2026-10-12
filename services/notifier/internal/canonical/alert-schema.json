@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.edu/correlated-alert/1-0.schema.json",
+  "title": "CorrelatedAlertV1",
+  "description": "Contrato de salida del Correlator hacia el topic correlated.alerts. Derivado del enunciado del proyecto, seccion 5.1.",
+  "type": "object",
+  "required": ["alert_id","type","score","zone","window","evidence","created_at"],
+  "properties": {
+    "alert_id": {"type":"string","format":"uuid"},
+    "correlation_id": {"type":"string","format":"uuid"},
+    "type": {
+      "type":"string",
+      "enum":["possible_robbery","accident","fire","traffic_speed_violation",
+        "vehicle_pursuit"]
+    },
+    "score": {
+      "type":"number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confianza de la correlacion. NO redondear a entero: la columna alerts.score es numeric."
+    },
+    "zone": {"type":"string"},
+    "window": {
+      "type":"object",
+      "required":["start","end"],
+      "properties": {
+        "start": {"type":"string","format":"date-time"},
+        "end": {"type":"string","format":"date-time"}
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type":"array",
+      "items": {"type":"string"},
+      "minItems": 1,
+      "description": "event_id de cada evento que sustenta la alerta."
+    },
+    "created_at": {"type":"string","format":"date-time"},
+    "rule_version": {
+      "type":"string",
+      "description": "Version del conjunto de reglas que produjo la alerta. Permite auditar cambios de umbrales."
+    }
+  },
+  "additionalProperties": false
+}

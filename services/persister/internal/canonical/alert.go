@@ -12,6 +12,10 @@ const (
 	AlertAccident              = "accident"
 	AlertFire                  = "fire"
 	AlertTrafficSpeedViolation = "traffic_speed_violation"
+
+	// Enlaza las infracciones sucesivas de un mismo vehiculo con el hecho que
+	// las origino. Es la unica alerta que no nace de una sola zona.
+	AlertVehiclePursuit = "vehicle_pursuit"
 )
 
 // Alert es la alerta correlacionada v1.0, contrato de salida hacia el topic

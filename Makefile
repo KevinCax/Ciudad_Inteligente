@@ -1,7 +1,7 @@
 # Makefile raiz. Orquesta los dos microservicios sin acoplarlos: cada uno se
 # compila y despliega por separado, esto solo evita repetir comandos.
 
-SERVICIOS := ingestor persister indexer correlator jobs
+SERVICIOS := ingestor persister indexer correlator jobs notifier
 GO        ?= go
 
 .PHONY: help
@@ -17,33 +17,34 @@ help:
 	@echo "  make check           fmt + vet + test + check-contracts"
 	@echo "  make docker          Construye las imagenes de ambos servicios"
 	@echo "  make adr             Consolida los ADR en docs/ADR-consolidado.md"
+	@echo "  make rutas-preparar  Descarga el mapa y prepara los indices de OSRM"
 
 # --- Contratos -------------------------------------------------------------
 # El schema vive una sola vez en contracts/ y se copia a cada servicio, que lo
 # embebe con go:embed. Ver contracts/README.md para el porque de este diseno.
 
+# Las listas son la fuente de verdad de quien recibe cada contrato. Antes
+# estaban escritas a mano copia por copia, y check-contracts solo verificaba 3
+# de las 7: las de persister e indexer podian quedar desincronizadas sin que
+# nada lo detectara. Ahora anadir un servicio es anadir una palabra, y la
+# comprobacion cubre por construccion todo lo que la sincronizacion escribe.
+ESQUEMA_EVENTO := contracts/canonical-event/v1.0/schema.json
+ESQUEMA_ALERTA := contracts/correlated-alert/v1.0/schema.json
+
+COPIAS_EVENTO := ingestor correlator persister indexer
+COPIAS_ALERTA := correlator persister indexer notifier
+
 .PHONY: sync-contracts
 sync-contracts:
-	@cp contracts/canonical-event/v1.0/schema.json services/ingestor/internal/canonical/schema.json
-	@cp contracts/canonical-event/v1.0/schema.json services/correlator/internal/canonical/schema.json
-	@cp contracts/canonical-event/v1.0/schema.json services/persister/internal/canonical/schema.json
-	@cp contracts/correlated-alert/v1.0/schema.json services/correlator/internal/canonical/alert-schema.json
-	@cp contracts/canonical-event/v1.0/schema.json services/indexer/internal/canonical/schema.json
-	@cp contracts/correlated-alert/v1.0/schema.json services/persister/internal/canonical/alert-schema.json
-	@cp contracts/correlated-alert/v1.0/schema.json services/indexer/internal/canonical/alert-schema.json
+	@for s in $(COPIAS_EVENTO); do 	  cp $(ESQUEMA_EVENTO) services/$$s/internal/canonical/schema.json; 	done
+	@for s in $(COPIAS_ALERTA); do 	  cp $(ESQUEMA_ALERTA) services/$$s/internal/canonical/alert-schema.json; 	done
 	@echo "contratos sincronizados"
 
 # check-contracts debe correr en CI: detecta que alguien edito la copia de un
 # servicio en lugar de la fuente de verdad.
 .PHONY: check-contracts
 check-contracts:
-	@diff -q contracts/canonical-event/v1.0/schema.json services/ingestor/internal/canonical/schema.json \
-	  || (echo "ERROR: la copia del ingestor difiere del contrato" && exit 1)
-	@diff -q contracts/canonical-event/v1.0/schema.json services/correlator/internal/canonical/schema.json \
-	  || (echo "ERROR: la copia del correlator difiere del contrato" && exit 1)
-	@diff -q contracts/correlated-alert/v1.0/schema.json services/correlator/internal/canonical/alert-schema.json \
-	  || (echo "ERROR: la copia del contrato de alerta difiere" && exit 1)
-	@echo "contratos sincronizados correctamente"
+	@fallo=0; 	for s in $(COPIAS_EVENTO); do 	  diff -q $(ESQUEMA_EVENTO) services/$$s/internal/canonical/schema.json >/dev/null 	    || { echo "ERROR: la copia del contrato de evento en $$s difiere"; fallo=1; }; 	done; 	for s in $(COPIAS_ALERTA); do 	  diff -q $(ESQUEMA_ALERTA) services/$$s/internal/canonical/alert-schema.json >/dev/null 	    || { echo "ERROR: la copia del contrato de alerta en $$s difiere"; fallo=1; }; 	done; 	[ $$fallo -eq 0 ] || exit 1; 	echo "contratos sincronizados correctamente (todas las copias verificadas)"
 
 # --- Ciclo de desarrollo ---------------------------------------------------
 
@@ -124,3 +125,11 @@ adr:
 .PHONY: load
 load:
 	cd test/load && $(GO) run . -escenario $(or $(ESCENARIO),sostenido)
+
+# --- Rutas por calle -------------------------------------------------------
+# Una sola vez: descarga el mapa de Guatemala y construye los indices que usa
+# el motor de rutas. Fuera de "up" porque son 131 MB y varios minutos.
+
+.PHONY: rutas-preparar
+rutas-preparar:
+	@bash deploy/preparar-rutas.sh

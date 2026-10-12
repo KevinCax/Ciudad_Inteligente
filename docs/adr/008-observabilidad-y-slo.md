@@ -331,6 +331,12 @@ Prometheus con datos reales.
 - **Falta el canal de notificación.** Las reglas disparan dentro de Prometheus,
   pero **no hay Alertmanager configurado** para enviarlas a un correo o un
   teléfono. Está identificado como trabajo pendiente.
+
+  Conviene no confundirlo con lo que resuelve
+  [ADR-011](011-aviso-a-terceros.md). Son dos canales distintos y ninguno
+  sustituye al otro: aquel avisa a **los cuerpos de respuesta** de que hay un
+  incendio en la zona 12; este avisaría al **equipo que opera el sistema** de
+  que el propio sistema está fallando. El segundo sigue pendiente.
 - **Instrumentar es trabajo recurrente.** Cada funcionalidad nueva debería
   añadir sus métricas, y eso se olvida con facilidad.
 

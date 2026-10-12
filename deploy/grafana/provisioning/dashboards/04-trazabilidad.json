@@ -1,0 +1,1046 @@
+{
+  "uid": "ciudad-trazabilidad",
+  "title": "Ciudad Inteligente — Trazabilidad de avisos y cadenas",
+  "description": "A que organismos se aviso de cada alerta, que eventos se correlacionan entre si, y por donde paso el vehiculo implicado.",
+  "tags": [
+    "ciudad-inteligente",
+    "trazabilidad"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "1h"
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "zona",
+        "label": "Zona",
+        "type": "custom",
+        "query": "zona_1,zona_2,zona_3,zona_4,zona_5,zona_6,zona_7,zona_8,zona_9,zona_10,zona_11,zona_12,zona_13,zona_14,zona_15,zona_16,zona_17,zona_18,zona_19,zona_21,zona_24,zona_25",
+        "options": [
+          {
+            "selected": false,
+            "text": "zona_1",
+            "value": "zona_1"
+          },
+          {
+            "selected": false,
+            "text": "zona_2",
+            "value": "zona_2"
+          },
+          {
+            "selected": false,
+            "text": "zona_3",
+            "value": "zona_3"
+          },
+          {
+            "selected": false,
+            "text": "zona_4",
+            "value": "zona_4"
+          },
+          {
+            "selected": false,
+            "text": "zona_5",
+            "value": "zona_5"
+          },
+          {
+            "selected": false,
+            "text": "zona_6",
+            "value": "zona_6"
+          },
+          {
+            "selected": false,
+            "text": "zona_7",
+            "value": "zona_7"
+          },
+          {
+            "selected": false,
+            "text": "zona_8",
+            "value": "zona_8"
+          },
+          {
+            "selected": false,
+            "text": "zona_9",
+            "value": "zona_9"
+          },
+          {
+            "selected": false,
+            "text": "zona_10",
+            "value": "zona_10"
+          },
+          {
+            "selected": false,
+            "text": "zona_11",
+            "value": "zona_11"
+          },
+          {
+            "selected": false,
+            "text": "zona_12",
+            "value": "zona_12"
+          },
+          {
+            "selected": false,
+            "text": "zona_13",
+            "value": "zona_13"
+          },
+          {
+            "selected": false,
+            "text": "zona_14",
+            "value": "zona_14"
+          },
+          {
+            "selected": false,
+            "text": "zona_15",
+            "value": "zona_15"
+          },
+          {
+            "selected": false,
+            "text": "zona_16",
+            "value": "zona_16"
+          },
+          {
+            "selected": false,
+            "text": "zona_17",
+            "value": "zona_17"
+          },
+          {
+            "selected": false,
+            "text": "zona_18",
+            "value": "zona_18"
+          },
+          {
+            "selected": false,
+            "text": "zona_19",
+            "value": "zona_19"
+          },
+          {
+            "selected": false,
+            "text": "zona_21",
+            "value": "zona_21"
+          },
+          {
+            "selected": false,
+            "text": "zona_24",
+            "value": "zona_24"
+          },
+          {
+            "selected": false,
+            "text": "zona_25",
+            "value": "zona_25"
+          }
+        ],
+        "includeAll": true,
+        "allValue": "%",
+        "multi": false,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "incidente",
+        "label": "Incidente",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "postgres-ciudad"
+        },
+        "definition": "SELECT to_char(e.ts_utc, 'DD/MM HH24:MI:SS') || '  ' ||\n       coalesce(e.zone, 'sin zona') AS __text,\n       e.event_id::text AS __value\nFROM events e\nWHERE e.event_type = 'panic.button'\n  AND e.ts_utc > now() - interval '24 hours'\nORDER BY e.ts_utc DESC\nLIMIT 100",
+        "query": {
+          "refId": "tpl-incidente",
+          "rawSql": "SELECT to_char(e.ts_utc, 'DD/MM HH24:MI:SS') || '  ' ||\n       coalesce(e.zone, 'sin zona') AS __text,\n       e.event_id::text AS __value\nFROM events e\nWHERE e.event_type = 'panic.button'\n  AND e.ts_utc > now() - interval '24 hours'\nORDER BY e.ts_utc DESC\nLIMIT 100",
+          "format": "table",
+          "editorMode": "code",
+          "rawQuery": true
+        },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "sort": 0,
+        "options": [],
+        "current": {}
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 301,
+      "type": "stat",
+      "title": "Avisos emitidos",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT count(*) AS avisos FROM notifications n WHERE $__timeFilter(n.creado_en) AND (n.zone LIKE '$zona' OR n.zone IS NULL)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "description": "Un aviso es una fila por organismo: una misma alerta de incendio produce dos, uno a bomberos y otro a ambulancia."
+    },
+    {
+      "id": 302,
+      "type": "stat",
+      "title": "Organismos avisados",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT count(DISTINCT n.organismo) AS organismos\nFROM notifications n WHERE $__timeFilter(n.creado_en) AND (n.zone LIKE '$zona' OR n.zone IS NULL)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 303,
+      "type": "stat",
+      "title": "Avisos fallidos",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT count(*) FILTER (WHERE n.estado = 'fallido') AS fallidos\nFROM notifications n WHERE $__timeFilter(n.creado_en) AND (n.zone LIKE '$zona' OR n.zone IS NULL)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "description": "Un aviso fallido queda registrado igual que uno entregado: la diferencia entre 'no se pudo avisar' y 'no se intento' es justo lo que necesita saber una investigacion posterior."
+    },
+    {
+      "id": 304,
+      "type": "stat",
+      "title": "Alertas sin ningun aviso",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT count(*) AS sin_aviso\nFROM alerts a\nWHERE $__timeFilter(a.created_at) AND a.zone LIKE '$zona'\n  AND NOT EXISTS (\n        SELECT 1 FROM notifications n WHERE n.alert_id = a.alert_id)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "description": "El numero que de verdad importa. Una alerta sin aviso no produce ningun error: el sistema sigue funcionando y sencillamente nadie acude. Deberia ser cero; si no lo es, falta una fila en la matriz de despacho o el notificador estuvo caido."
+    },
+    {
+      "id": 305,
+      "type": "table",
+      "title": "Avisos a terceros",
+      "gridPos": {
+        "h": 10,
+        "w": 14,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT n.creado_en   AS \"Hora\",\n       n.alert_type  AS \"Tipo de alerta\",\n       n.zone        AS \"Zona\",\n       n.organismo   AS \"Organismo\",\n       n.canal       AS \"Canal\",\n       n.estado      AS \"Estado\",\n       coalesce(n.detalle, '') AS \"Detalle\"\nFROM notifications n\nWHERE $__timeFilter(n.creado_en) AND (n.zone LIKE '$zona' OR n.zone IS NULL)\nORDER BY n.creado_en DESC\nLIMIT 300"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "description": "Canal 'simulado' significa que el aviso quedo registrado pero NO se entrego a ningun organismo real: no existe integracion con bomberos, policia ni ambulancias."
+    },
+    {
+      "id": 306,
+      "type": "barchart",
+      "title": "Avisos por organismo",
+      "gridPos": {
+        "h": 5,
+        "w": 10,
+        "x": 14,
+        "y": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT n.organismo AS \"Organismo\", count(*) AS \"Avisos\"\nFROM notifications n WHERE $__timeFilter(n.creado_en) AND (n.zone LIKE '$zona' OR n.zone IS NULL)\nGROUP BY 1 ORDER BY 2 DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.8,
+        "barRadius": 0,
+        "fullHighlight": false,
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 307,
+      "type": "piechart",
+      "title": "Reparto por tipo de alerta",
+      "gridPos": {
+        "h": 5,
+        "w": 10,
+        "x": 14,
+        "y": 9
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT n.alert_type AS \"Tipo\", count(*) AS \"Avisos\"\nFROM notifications n WHERE $__timeFilter(n.creado_en) AND (n.zone LIKE '$zona' OR n.zone IS NULL)\nGROUP BY 1 ORDER BY 2 DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        }
+      }
+    },
+    {
+      "id": 308,
+      "type": "nodeGraph",
+      "title": "Que evento se correlaciona con cual",
+      "gridPos": {
+        "h": 13,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "WITH recientes AS (\n  SELECT a.alert_id, a.type, a.zone, a.score, a.evidence, a.created_at\n  FROM alerts a\n  WHERE $__timeFilter(a.created_at) AND a.zone LIKE '$zona'\n  ORDER BY a.created_at DESC\n  LIMIT 12\n)\nSELECT r.alert_id::text AS id,\n       r.type           AS title,\n       r.zone           AS \"subTitle\",\n       round(r.score, 2)::text AS \"mainStat\",\n       'ALERTA'         AS \"secondaryStat\"\nFROM recientes r\nUNION\nSELECT DISTINCT e.event_id::text,\n       e.event_type,\n       e.zone,\n       coalesce(e.payload->>'infraccion',\n                e.payload->>'tipo_evento',\n                e.payload->>'tipo_sonido_detectado',\n                e.payload->>'velocidad_estimada',\n                '') ,\n       'evidencia'\nFROM recientes r\nCROSS JOIN LATERAL jsonb_array_elements_text(r.evidence) AS ev(id)\nJOIN events e ON e.event_id = ev.id::uuid"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "WITH recientes AS (\n  SELECT a.alert_id, a.type, a.zone, a.score, a.evidence, a.created_at\n  FROM alerts a\n  WHERE $__timeFilter(a.created_at) AND a.zone LIKE '$zona'\n  ORDER BY a.created_at DESC\n  LIMIT 12\n)\nSELECT r.alert_id::text || ':' || ev.id AS id,\n       r.alert_id::text AS source,\n       ev.id            AS target\nFROM recientes r\nCROSS JOIN LATERAL jsonb_array_elements_text(r.evidence) AS ev(id)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "nodes": {
+          "mainStatUnit": "",
+          "secondaryStatUnit": ""
+        },
+        "edges": {
+          "mainStatUnit": ""
+        }
+      },
+      "description": "Cada alerta con los eventos que la sustentan. La relacion sale de alerts.evidence, no de correlation_id: el enriquecedor asigna un correlation_id distinto a cada evento, de modo que ese campo no agrupa nada."
+    },
+    {
+      "id": 309,
+      "type": "table",
+      "title": "Evidencias, evento por evento",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "WITH recientes AS (\n  SELECT a.alert_id, a.type, a.zone, a.score, a.evidence, a.created_at\n  FROM alerts a\n  WHERE $__timeFilter(a.created_at) AND a.zone LIKE '$zona'\n  ORDER BY a.created_at DESC\n  LIMIT 12\n)\nSELECT r.created_at  AS \"Alerta\",\n       r.type        AS \"Tipo de alerta\",\n       e.ts_utc      AS \"Hora del evento\",\n       e.event_type  AS \"Sensor\",\n       e.zone        AS \"Zona\",\n       coalesce(e.payload->>'infraccion', '') AS \"Infraccion\",\n       coalesce(e.payload->>'velocidad_estimada',\n                e.payload->>'velocidad_detectada', '') AS \"Velocidad\",\n       left(coalesce(e.payload->>'placa_vehicular', ''), 14) AS \"Vehiculo\"\nFROM recientes r\nCROSS JOIN LATERAL jsonb_array_elements_text(r.evidence) AS ev(id)\nJOIN events e ON e.event_id = ev.id::uuid\nORDER BY r.created_at DESC, e.ts_utc"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "description": "La misma informacion que el grafo, en forma de lista. Se mantiene a proposito: si el grafo no renderiza, esta tabla sigue respondiendo la pregunta."
+    },
+    {
+      "id": 310,
+      "type": "table",
+      "title": "Incidentes: botones de panico",
+      "gridPos": {
+        "h": 12,
+        "w": 11,
+        "x": 0,
+        "y": 37
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT e.ts_utc AS \"Hora\",\n       e.zone   AS \"Zona\",\n       coalesce(e.payload->>'tipo_de_alerta', '') AS \"Aviso\",\n       coalesce((SELECT string_agg(DISTINCT a.type, ', ')\n                 FROM alerts a\n                 WHERE jsonb_exists(a.evidence, e.event_id::text)),\n                'sin correlacionar') AS \"Derivo en\",\n       e.event_id::text AS \"Incidente\"\nFROM events e\nWHERE e.event_type = 'panic.button'\n  AND $__timeFilter(e.ts_utc)\n  AND e.zone LIKE '$zona'\nORDER BY e.ts_utc DESC\nLIMIT 200"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          },
+          "links": [
+            {
+              "title": "Ver la trazabilidad de este incidente en el mapa",
+              "url": "/d/ciudad-trazabilidad?${__url_time_range}&${zona:queryparam}&var-incidente=${__data.fields.Incidente}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "description": "Solo botones de panico: cada fila es el arranque de un incidente. Al pulsar una fila el mapa de al lado dibuja su trazabilidad completa. La columna 'Derivo en' dice que alertas se correlacionaron a partir de ese boton; 'sin correlacionar' significa que el pulsador no encontro eventos que lo acompanaran, que es el caso de falso positivo del enunciado."
+    },
+    {
+      "id": 311,
+      "type": "geomap",
+      "title": "Trazabilidad del incidente, de principio a fin",
+      "gridPos": {
+        "h": 12,
+        "w": 13,
+        "x": 11,
+        "y": 37
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres-ciudad"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "WITH cadena AS (\n  SELECT DISTINCT ev.id::uuid AS eid\n  FROM alerts a\n  CROSS JOIN LATERAL jsonb_array_elements_text(a.evidence) AS ev(id)\n  WHERE jsonb_exists(a.evidence, '$incidente')\n),\narranque AS (\n  SELECT min(e.ts_utc) AS t0\n  FROM events e JOIN cadena c ON e.event_id = c.eid\n),\nvehiculos AS (\n  SELECT DISTINCT e.payload->>'placa_vehicular' AS placa\n  FROM events e JOIN cadena c ON e.event_id = c.eid\n  WHERE e.payload ? 'placa_vehicular'\n),\nbruto AS (\n  SELECT e.event_id,\n         e.payload->>'placa_vehicular' AS placa,\n         lag(e.ts_utc) OVER (PARTITION BY e.payload->>'placa_vehicular'\n                             ORDER BY e.ts_utc) AS anterior,\n         e.ts_utc\n  FROM events e\n  WHERE e.payload->>'placa_vehicular' IN (SELECT placa FROM vehiculos)\n    AND e.ts_utc >= (SELECT t0 FROM arranque)\n),\nrastro AS (\n  SELECT event_id,\n         sum(CASE WHEN anterior IS NULL\n                    OR ts_utc - anterior <= interval '30 minutes'\n                  THEN 0 ELSE 1 END)\n           OVER (PARTITION BY placa ORDER BY ts_utc) AS tramo\n  FROM bruto\n),\nincidente AS (\n  SELECT c.eid AS event_id, true AS es_evidencia FROM cadena c\n  UNION\n  SELECT r.event_id, false\n  FROM rastro r\n  WHERE r.tramo = 0\n    AND NOT EXISTS (SELECT 1 FROM cadena c WHERE c.eid = r.event_id)\n)\nSELECT e.geo_lat AS latitude,\n       e.geo_lon AS longitude,\n       row_number() OVER (ORDER BY e.ts_utc) AS \"Orden\",\n       CASE\n         WHEN row_number() OVER (ORDER BY e.ts_utc) = 1\n           THEN 'INICIO'\n         WHEN row_number() OVER (ORDER BY e.ts_utc DESC) = 1\n           THEN 'ULTIMO CONTACTO'\n         ELSE ''\n       END          AS \"Hito\",\n       e.ts_utc     AS \"Hora\",\n       e.zone       AS \"Zona\",\n       e.event_type AS \"Sensor\",\n       CASE WHEN i.es_evidencia THEN 'evidencia'\n            ELSE 'seguimiento' END AS \"Origen\",\n       coalesce(e.payload->>'infraccion', '') AS \"Infraccion\",\n       coalesce(e.payload->>'velocidad_estimada',\n                e.payload->>'velocidad_detectada', '') AS \"Velocidad\",\n       left(coalesce(e.payload->>'placa_vehicular', ''), 14) AS \"Vehiculo\"\nFROM incidente i\nJOIN events e ON e.event_id = i.event_id\nWHERE e.geo_lat IS NOT NULL\nORDER BY e.ts_utc\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres-ciudad"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "WITH alerta AS (\n  SELECT a.alert_id\n  FROM alerts a\n  WHERE jsonb_exists(a.evidence, '$incidente')\n  ORDER BY jsonb_array_length(a.evidence) DESC, a.created_at DESC\n  LIMIT 1\n)\nSELECT (p->>1)::float8 AS latitude,\n       (p->>0)::float8 AS longitude,\n       ord            AS \"Vertice\"\nFROM alert_routes r\nJOIN alerta x ON x.alert_id = r.alert_id\nCROSS JOIN LATERAL jsonb_array_elements(r.geometria)\n  WITH ORDINALITY AS t(p, ord)\nWHERE r.estado = 'calculada'\nORDER BY ord"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "view": {
+          "id": "coords",
+          "lat": 14.6349,
+          "lon": -90.5069,
+          "zoom": 11,
+          "allLayers": true
+        },
+        "basemap": {
+          "type": "osm-standard",
+          "name": "OpenStreetMap",
+          "config": {}
+        },
+        "layers": [
+          {
+            "type": "route",
+            "name": "Recorrido por calles",
+            "tooltip": false,
+            "opacity": 1,
+            "filterData": {
+              "id": "byRefId",
+              "options": "B"
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "latitude",
+              "longitude": "longitude"
+            },
+            "config": {
+              "style": {
+                "color": {
+                  "fixed": "dark-blue"
+                },
+                "opacity": 0.9,
+                "lineWidth": 5,
+                "size": {
+                  "fixed": 5,
+                  "min": 1,
+                  "max": 8
+                },
+                "arrow": 1
+              }
+            }
+          },
+          {
+            "type": "markers",
+            "name": "Donde lo vieron las camaras",
+            "tooltip": true,
+            "opacity": 0.95,
+            "filterData": {
+              "id": "byRefId",
+              "options": "A"
+            },
+            "location": {
+              "mode": "coords",
+              "latitude": "latitude",
+              "longitude": "longitude"
+            },
+            "config": {
+              "showLegend": false,
+              "style": {
+                "color": {
+                  "field": "Orden",
+                  "fixed": "dark-red"
+                },
+                "opacity": 0.9,
+                "text": {
+                  "mode": "field",
+                  "field": "Hito",
+                  "fixed": ""
+                },
+                "size": {
+                  "fixed": 9,
+                  "min": 7,
+                  "max": 14
+                },
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "textConfig": {
+                  "fontSize": 13,
+                  "offsetX": 0,
+                  "offsetY": 18,
+                  "textAlign": "center",
+                  "textBaseline": "middle"
+                }
+              }
+            }
+          }
+        ],
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showScale": false,
+          "showMeasure": true,
+          "showDebug": false
+        },
+        "tooltip": {
+          "mode": "details"
+        }
+      },
+      "description": "El punto verde rotulado INICIO es donde empezo el incidente; el rojo rotulado ULTIMO CONTACTO es la ultima vez que un sensor vio el vehiculo. La linea azul es el recorrido por calles que el motor de rutas considera mas probable entre esos puntos, y la flecha marca el sentido. OJO al explicarlo: el sistema NO midio ese camino, midio los puntos. La columna Origen distingue 'evidencia' (lo que sostiene la alerta) de 'seguimiento' (apariciones posteriores del mismo vehiculo). El rastro se corta cuando pasan mas de 30 minutos sin verlo; el sistema NO puede saber si eso fue porque se detuvo, porque salio de la ciudad o porque dejo de haber camaras. Pulse una fila de la tabla de la izquierda para ver otro incidente."
+    }
+  ]
+}

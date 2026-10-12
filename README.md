@@ -58,8 +58,9 @@ métricas. El razonamiento completo está en
 | [persister](services/persister) | `ciudadinteligente/persister` | 8002 | Archiva eventos y alertas en PostgreSQL, por lotes | Sí |
 | [indexer](services/indexer) | `ciudadinteligente/indexer` | 8003 | Indexa eventos y alertas en Elasticsearch, por lotes | Sí |
 | [jobs](services/jobs) | `ciudadinteligente/jobs` | 8004 | Agregados diarios y retención del histórico | Sí |
+| [notifier](services/notifier) | `ciudadinteligente/notifier` | 8005 | Avisa a los organismos de respuesta y registra cada aviso | Sí |
 
-El correlator escucha en 8080 dentro de la red de Docker, pero **se publica en el host en 8001**: 8080 es el puerto por defecto de media industria y choca a menudo con otro programa. Así, además, los cinco quedan en serie —8000, 8001, 8002, 8003, 8004. Se cambia con `CORRELATOR_HOST_PORT` en `deploy/.env`.
+El correlator escucha en 8080 dentro de la red de Docker, pero **se publica en el host en 8001**: 8080 es el puerto por defecto de media industria y choca a menudo con otro programa. Así, además, los seis quedan en serie —8000, 8001, 8002, 8003, 8004, 8005. Se cambia con `CORRELATOR_HOST_PORT` en `deploy/.env`.
 
 Cada servicio es un **módulo Go independiente**: se compila, versiona y despliega por separado. No comparten código.
 

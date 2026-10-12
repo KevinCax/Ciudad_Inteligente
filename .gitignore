@@ -27,3 +27,7 @@ Thumbs.db
 
 # JetBrains AI
 .junie/
+
+# Datos de OSRM: el mapa de OpenStreetMap y sus indices derivados pesan
+# cientos de megas y se regeneran con "./make.sh rutas-preparar".
+deploy/osrm-data/

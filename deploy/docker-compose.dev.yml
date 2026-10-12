@@ -23,7 +23,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # Los scripts de esta carpeta se ejecutan solo la primera vez que se
-      # inicializa el volumen. Para reaplicarlos hay que borrar el volumen.
+      # inicializa el volumen. Para reaplicarlos esta postgres-migrate.
       - ./sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ciudad} -d ${POSTGRES_DB:-ciudades}"]
@@ -33,22 +33,60 @@ services:
     networks: [ciudad_lan]
     restart: unless-stopped
 
-  # Solo los servicios que escriben en la base esperan a que este lista.
-  # El ingestor no aparece aqui a proposito: ya no depende de PostgreSQL.
-  persister:
+  # Aplica deploy/sql/*.sql en orden, en cada arranque, y termina.
+  #
+  # Hace falta porque docker-entrypoint-initdb.d SOLO se ejecuta la primera vez
+  # que se inicializa el volumen: sin esto, anadir una tabla obliga a borrar el
+  # volumen y perder los datos, que es justo lo que no se puede hacer a mitad
+  # de una demostracion. Los scripts son idempotentes (todo lleva IF NOT
+  # EXISTS), asi que reaplicarlos en cada arranque no cuesta nada.
+  #
+  # ON_ERROR_STOP=1 es deliberado: una migracion que falla a medias debe
+  # detener el arranque, no dejar el esquema a medio aplicar y que el fallo
+  # aparezca despues como una columna que no existe.
+  postgres-migrate:
+    image: postgres:16-alpine
+    container_name: ciudad-postgres-migrate
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      PGUSER: ${POSTGRES_USER:-ciudad}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-ciudad}
+      PGDATABASE: ${POSTGRES_DB:-ciudades}
+    volumes:
+      - ./sql:/sql:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - 'set -e; for f in /sql/*.sql; do echo "aplicando $$(basename $$f)"; psql -h postgres -U "$${PGUSER}" -d "$${PGDATABASE}" -v ON_ERROR_STOP=1 -q -f "$$f"; done; echo "esquema al dia"'
+    networks: [ciudad_lan]
+    restart: "no"
+
+  # Solo los servicios que escriben en la base esperan a que este lista.
+  # El ingestor no aparece aqui a proposito: ya no depende de PostgreSQL.
+  #
+  # Esperan a postgres-migrate, no a postgres: que la base acepte conexiones no
+  # significa que las tablas existan. Sin esta espera, el notificador podria
+  # intentar escribir en notifications antes de que la tabla estuviera creada.
+  persister:
+    depends_on:
+      postgres-migrate:
+        condition: service_completed_successfully
 
   correlator:
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres-migrate:
+        condition: service_completed_successfully
 
   jobs:
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres-migrate:
+        condition: service_completed_successfully
+
+  notifier:
+    depends_on:
+      postgres-migrate:
+        condition: service_completed_successfully
 
 volumes:
   postgres-data:

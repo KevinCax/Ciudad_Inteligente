@@ -32,9 +32,9 @@ Diseñar, justificar y construir una simulación funcional de una plataforma de 
 
 El alcance es una **simulación lógica**. No se emplean dispositivos físicos de adquisición: los cinco tipos de sensor urbano se emulan programáticamente con un generador de carga escrito para este proyecto. Esta es una condición del enunciado, no una concesión.
 
-Dentro del alcance quedan la ingesta, la validación contra contrato, la deduplicación, la correlación en ventanas temporales, la generación de alertas, el archivado estructurado, la indexación para búsqueda histórica, la retención de datos, la observabilidad y la visualización.
+Dentro del alcance quedan la ingesta, la validación contra contrato, la deduplicación, la correlación en ventanas temporales —tanto por zona como por vehículo—, la generación de alertas, el registro trazable de a qué organismo de respuesta se avisa de cada una, el archivado estructurado, la indexación para búsqueda histórica, la retención de datos, la observabilidad y la visualización.
 
-Fuera del alcance quedan la integración con sistemas reales de despacho de emergencias, el reconocimiento de imágenes, cualquier forma de aprendizaje automático sobre los eventos, y la infraestructura física de red. Las limitaciones técnicas concretas que el sistema conserva se enumeran sin adornos en la sección *Limitaciones y trabajo futuro*.
+Fuera del alcance quedan la **entrega real** a los sistemas de despacho de emergencias, el reconocimiento de imágenes, cualquier forma de aprendizaje automático sobre los eventos, y la infraestructura física de red. La distinción con el despacho importa: el sistema decide a qué cuerpo de respuesta corresponde cada alerta y lo registra con su canal, su hora y su resultado, pero el canal de entrega está simulado y ningún cuerpo recibe el aviso. Conectar esa decisión con una central de emergencias exige convenios y protocolos acordados con cada organismo, que no son decisiones de arquitectura. Las limitaciones técnicas concretas que el sistema conserva se enumeran sin adornos en la sección *Limitaciones y trabajo futuro*.
 
 ## Metodología de trabajo
 
@@ -132,7 +132,7 @@ El recorrido completo, desde que un sensor simulado emite hasta que la alerta es
 2. El ingestor completa los campos que el productor omitió —identificador, marca de tiempo, clave de partición— y registra cuáles tuvo que completar, porque un productor que sistemáticamente omite un campo es un defecto que conviene ver.
 3. Reserva el identificador del evento en Redis con una operación atómica. Si ya existía, responde `409` sin publicar: el reintento de un productor no duplica el evento.
 4. Publica en el topic `events.standardized` con confirmación de todas las réplicas, particionando **por zona geográfica**, y solo entonces responde `202`.
-5. El correlator consume, inserta el evento en la ventana de su zona —un conjunto ordenado de Redis cuya puntuación es la marca de tiempo— y evalúa las cuatro reglas. Si alguna se cumple y no hay una alerta equivalente vigente, emite la alerta.
+5. El correlator consume, inserta el evento en la ventana de su zona —un conjunto ordenado de Redis cuya puntuación es la marca de tiempo— y evalúa las cuatro reglas de zona. Si el evento trae placa, lo inserta además en una segunda ventana indexada por el seudónimo del vehículo y evalúa la regla de persecución. Si alguna regla se cumple y no hay una alerta equivalente vigente, emite la alerta.
 6. El persister y el indexer consumen el mismo flujo con grupos de consumo independientes y escriben por lotes en PostgreSQL y Elasticsearch, tokenizando la placa antes de que el dato salga de la red municipal.
 
 El identificador de traza entra por la cabecera `X-Trace-Id`, viaja en las cabeceras del mensaje de Kafka y aparece en el registro de los cinco servicios, de modo que **un solo identificador reconstruye el recorrido completo** de cualquier evento.
@@ -302,7 +302,7 @@ Cada zona tiene un conjunto ordenado en Redis cuya puntuación es la marca de ti
 
 Dos detalles importan. El primero: la puntuación se guarda en **milisegundos y no en nanosegundos**, porque la puntuación de un conjunto ordenado es un número de coma flotante de doble precisión y una marca en nanosegundos excede la precisión entera que ese formato garantiza, produciendo colisiones. El segundo: la ventana se **poda en cada inserción**, de modo que su tamaño queda acotado por el tiempo y no por el volumen acumulado.
 
-## Las cuatro reglas
+## Las cinco reglas
 
 :::tabla Reglas de correlación implementadas
 | Alerta | Condición | Confianza |
@@ -312,10 +312,13 @@ Dos detalles importan. El primero: la puntuación se guarda en **milisegundos y 
 | `accident` | Lo anterior, además con una caída de velocidad por debajo de 40 km/h | 0.95 |
 | `fire` | Sensor acústico de explosión o vidrio roto más reporte ciudadano de incendio | 0.95 |
 | `traffic_speed_violation` | Velocidad sostenida por encima del umbral en la zona | 0.90 |
+| `vehicle_pursuit` | Dos infracciones del mismo vehículo, en una o varias zonas, con un botón de pánico en alguna de ellas | 0.92 |
 :::nota La confianza es un número real entre 0 y 1, no un entero. La columna correspondiente en la base de datos lo garantiza con una restricción de rango. Los valores se verificaron contra el motor de reglas en ejecución.
 :::
 
 El caso `possible_robbery` reproduce exactamente el ejemplo de correlación esperada del enunciado: zona 4, botón de pánico, placa XYZ123 y 85 km/h dentro de la misma ventana producen una alerta de robo en curso.
+
+La regla `vehicle_pursuit` rompe la premisa de las otras cuatro: agrupa por vehículo y no por zona. Tiene que hacerlo, porque la secuencia que modela —un robo, el mismo coche cruzando un semáforo en rojo, y después circulando a velocidad excesiva ya en otra zona— es invisible para cualquier ventana de zona. Un coche que huye cambia de zona precisamente para dejar de aparecer en ella.
 
 ## Falsos positivos
 
@@ -530,7 +533,11 @@ Enumerar las limitaciones es parte del ejercicio de arquitectura. Las siguientes
 
 **Los plazos de retención carecen de aprobación institucional.** Los valores implementados son una propuesta técnica. Determinan cuánto tiempo una institución pública conserva datos personales de ciudadanos, y esa no es una decisión de ingeniería.
 
-**No hay canal de notificación configurado.** Las reglas de alerta están definidas y validadas, pero el componente que las entrega por correo o mensajería no se desplegó. Sin él, las alertas existen pero no llegan a nadie.
+**El aviso a terceros se registra, pero no se entrega.** El servicio `notifier` decide a qué organismos corresponde cada alerta —bomberos y ambulancia en un incendio, policía en un robo— y deja constancia de cada aviso con su canal, su hora y su resultado. El canal por defecto es `simulado`: anota la fila y escribe en el registro. **Nadie acude.** La trazabilidad que el requisito pedía está completa; la entrega real no existe y no se disimula en ningún tablero.
+
+**No hay reintento ni acuse de recibo del aviso.** Un aviso fallido queda en estado `fallido` y ahí permanece. La política de reintento —cuántas veces, con qué espera— depende de cada cuerpo de respuesta y no tiene sentido inventarla antes de que exista el convenio.
+
+**El canal de notificación al equipo de operación sigue sin configurar.** Es un hueco distinto del anterior y conviene no confundirlos: las reglas de Prometheus disparan y mueren dentro de Prometheus, porque no hay Alertmanager. Si el propio sistema falla de madrugada, nadie se entera.
 
 **El generador de carga no reintenta.** En operación real, un productor debería reintentar ante un rechazo transitorio; el simulador no lo hace, lo que hace visible el hueco de segundos durante un redespliegue.
 

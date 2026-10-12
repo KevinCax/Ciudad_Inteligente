@@ -12,6 +12,7 @@ import (
 	"ciudadinteligente/correlator/internal/broker"
 	"ciudadinteligente/correlator/internal/canonical"
 	"ciudadinteligente/correlator/internal/obs"
+	"ciudadinteligente/correlator/internal/privacy"
 	"ciudadinteligente/correlator/internal/rules"
 	"ciudadinteligente/correlator/internal/window"
 )
@@ -24,22 +25,27 @@ import (
 // del enlace a internet retrasa el archivo historico, pero no interrumpe la
 // deteccion.
 type Service struct {
-	ventanas   *window.Store
-	publicador *broker.Publisher
-	validador  *canonical.Validator
-	reglas     rules.Config
-	metrics    *obs.Metrics
-	log        *slog.Logger
+	ventanas    *window.Store
+	publicador  *broker.Publisher
+	validador   *canonical.Validator
+	tokenizador *privacy.Tokenizador
+	reglas      rules.Config
+	metrics     *obs.Metrics
+	log         *slog.Logger
 }
 
 // New construye el motor.
-// La tokenizacion de placas tampoco vive aqui: el correlator no escribe nada
-// fuera de la LAN. Quien cruza la frontera hacia la nube es el persister, y es
-// alli donde la placa se convierte en seudonimo.
+//
+// El correlator SI tokeniza placas, pero por un motivo distinto al del
+// persister y el indexer. Ellos lo hacen para que el dato personal no cruce a
+// la nube. Aqui no se escribe nada fuera de la LAN: el seudonimo se usa como
+// clave de la ventana de vehiculo, y tiene que ser el mismo que archivan
+// aquellos para que una alerta de persecucion se pueda cruzar despues con el
+// historico del coche. Por eso la llave HMAC debe ser identica en los tres.
 func New(v *window.Store, p *broker.Publisher, val *canonical.Validator,
-	cfg rules.Config, m *obs.Metrics, log *slog.Logger) *Service {
+	tok *privacy.Tokenizador, cfg rules.Config, m *obs.Metrics, log *slog.Logger) *Service {
 	return &Service{
-		ventanas: v, publicador: p, validador: val,
+		ventanas: v, publicador: p, validador: val, tokenizador: tok,
 		reglas: cfg, metrics: m, log: log,
 	}
 }
@@ -96,6 +102,8 @@ func (s *Service) Procesar(ctx context.Context, m *broker.Mensaje) error {
 		Timestamp: ev.Timestamp,
 		Zone:      zona,
 		Payload:   ev.Payload,
+		Lat:       ev.Geo.Lat,
+		Lon:       ev.Geo.Lon,
 	}, momento); err != nil {
 		return err
 	}
@@ -121,7 +129,7 @@ func (s *Service) Procesar(ctx context.Context, m *broker.Mensaje) error {
 	}, s.reglas)
 
 	for _, det := range resultado.Detecciones {
-		if err := s.emitir(ctx, det, ev, momento); err != nil {
+		if err := s.emitir(ctx, det, ev, momento, det.Zona); err != nil {
 			log.Error("no se pudo emitir la alerta",
 				slog.String("tipo", det.Tipo),
 				slog.String("zona", zona),
@@ -143,20 +151,208 @@ func (s *Service) Procesar(ctx context.Context, m *broker.Mensaje) error {
 		}
 	}
 
+	// Segundo camino de correlacion, independiente del anterior: el que
+	// agrupa por vehiculo en lugar de por zona.
+	//
+	// Un boton de panico no trae placa, pero es el ancla de la regla de
+	// persecucion, asi que al llegar hay que revisar si algun vehiculo de la
+	// zona ya tenia una cadena a medias esperandolo. Sin esta rama hay una
+	// carrera real: Kafka reparte por zona, de modo que el evento de la zona 9
+	// y el panico de la zona 1 viajan en particiones distintas y su orden
+	// relativo NO esta garantizado. Si la particion del panico va retrasada
+	// —cosa normal tras un reinicio o un rebalanceo— la regla se evalua antes
+	// de que exista su ancla y la alerta no se emite nunca.
+	//
+	// Se vio ocurrir: una cadena completa quedo solo como coincidencia parcial
+	// en corr:pending:persecucion_vehicular:zona_9, por diecisiete segundos de
+	// desfase entre particiones.
+	if ev.EventType == canonical.TypePanicButton {
+		return s.reevaluarVehiculosDeLaZona(ctx, ev, momento, resumenes)
+	}
+
+	return s.correlacionarVehiculo(ctx, ev, momento)
+}
+
+// reevaluarVehiculosDeLaZona vuelve a evaluar la regla de persecucion para
+// cada vehiculo que aparece en la ventana de la zona donde se pulso el boton.
+//
+// El coste esta acotado por los vehiculos distintos de esa ventana, que son
+// pocos, y no exige ningun indice nuevo: la ventana de zona ya se leyo para
+// las reglas anteriores y se reutiliza tal cual.
+func (s *Service) reevaluarVehiculosDeLaZona(ctx context.Context, ev *canonical.Event,
+	momento time.Time, resumenes []window.Resumen) error {
+
+	vistos := map[string]bool{}
+
+	for _, r := range resumenes {
+		placa, _ := r.Payload["placa_vehicular"].(string)
+		if placa == "" {
+			continue
+		}
+		token := s.tokenizador.Tokenizar(placa)
+		if vistos[token] {
+			continue
+		}
+		vistos[token] = true
+
+		if err := s.evaluarVehiculo(ctx, token, ev, momento); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// correlacionarVehiculo sigue las apariciones de un mismo coche.
+//
+// Existe porque la ventana de zona no puede ver una huida: un vehiculo que
+// escapa cambia de zona precisamente para dejar de aparecer en ella. Cada
+// aparicion se anota ademas en una ventana indexada por el seudonimo de la
+// placa, que cruza zonas.
+func (s *Service) correlacionarVehiculo(ctx context.Context, ev *canonical.Event,
+	momento time.Time) error {
+
+	placa, _ := ev.Payload["placa_vehicular"].(string)
+	if placa == "" {
+		return nil
+	}
+
+	// El seudonimo, nunca la placa en claro: es lo que se usa como clave de
+	// Redis y lo que coincide con el dato archivado en PostgreSQL.
+	token := s.tokenizador.Tokenizar(placa)
+
+	if err := s.ventanas.AgregarEventoVehiculo(ctx, token, &window.Resumen{
+		EventID:   ev.EventID,
+		EventType: ev.EventType,
+		Timestamp: ev.Timestamp,
+		Zone:      ev.Zone(),
+		Payload:   ev.Payload,
+		Lat:       ev.Geo.Lat,
+		Lon:       ev.Geo.Lon,
+	}, momento); err != nil {
+		return err
+	}
+
+	return s.evaluarVehiculo(ctx, token, ev, momento)
+}
+
+// evaluarVehiculo corre la regla de persecucion sobre la ventana de un
+// vehiculo. No modifica la ventana: solo la lee.
+//
+// Esta separado de correlacionarVehiculo porque hay dos caminos que llevan
+// aqui. Uno es la llegada de una lectura de placa, que primero anota la
+// aparicion. El otro es la llegada de un boton de panico, que no anota nada
+// —un pulsador no tiene matricula— pero puede completar la cadena de un
+// vehiculo que ya estaba a medias.
+func (s *Service) evaluarVehiculo(ctx context.Context, token string,
+	ev *canonical.Event, momento time.Time) error {
+
+	log := obs.LoggerFrom(ctx, s.log)
+
+	// La ventana se lee en AMBOS sentidos alrededor del evento que la
+	// dispara, no solo hacia atras.
+	//
+	// Acotar el extremo superior al instante del evento parece lo natural
+	// —no se puede ver el futuro— y es un error cuando los eventos llegan
+	// desordenados, que es lo normal: Kafka reparte por zona, de modo que una
+	// lectura de la zona 1 y otra de la zona 9 viajan en particiones distintas
+	// y su orden de proceso no respeta el de los relojes. Si el evento mas
+	// ANTIGUO de la cadena se procesa el ULTIMO, con el extremo superior
+	// cerrado su consulta no ve ninguna de las lecturas posteriores que ya
+	// habian llegado: cuenta una sola infraccion y se va. La cadena se pierde
+	// sin dejar rastro, que es la forma mas cara de fallar.
+	//
+	// Se vio ocurrir con un escenario de cuatro eventos.
+	margen := s.reglas.VentanaPersecucion
+	resumenes, err := s.ventanas.EventosDeVehiculo(ctx, token,
+		momento.Add(-margen), momento.Add(margen))
+	if err != nil {
+		return err
+	}
+	eventos := rules.DesdeResumenes(resumenes)
+
+	// El punto de referencia es la aparicion MAS RECIENTE que se conoce del
+	// vehiculo, no el evento que disparo la evaluacion. Asi la ventana mide lo
+	// mismo llegue el ultimo evento primero o el primero el ultimo.
+	ahora := momento
+	for _, e := range eventos {
+		if e.Momento.After(ahora) {
+			ahora = e.Momento
+		}
+	}
+	desde := ahora.Add(-s.reglas.VentanaPersecucion)
+
+	// Filtro barato ANTES de las consultas por zona. Buscar los botones de
+	// panico exige una lectura de Redis por cada zona que el vehiculo visito;
+	// hacerlo para cada lectura de placa de la ciudad multiplicaria el trafico
+	// contra Redis sin que la inmensa mayoria llegue a cumplir la regla.
+	infracciones := rules.CadenaPlausible(
+		rules.Infracciones(eventos, desde, s.reglas), s.reglas)
+	if len(infracciones) < s.reglas.MinInfraccionesPersecucion {
+		return nil
+	}
+
+	var panicos []rules.Evento
+	for _, z := range rules.ZonasVisitadas(infracciones, desde) {
+		rs, err := s.ventanas.EventosEnVentana(ctx, z, desde, ahora)
+		if err != nil {
+			return err
+		}
+		panicos = append(panicos, rules.PanicosDe(rules.DesdeResumenes(rs))...)
+	}
+
+	resultado := rules.EvaluarVehiculo(rules.VentanaVehiculo{
+		Token:   token,
+		Ahora:   ahora,
+		Eventos: eventos,
+		Panicos: panicos,
+	}, s.reglas)
+
+	for _, det := range resultado.Detecciones {
+		// La supresion va por vehiculo, no por zona: dos coches huyendo por
+		// la misma zona son dos incidentes distintos.
+		if err := s.emitir(ctx, det, ev, momento, token); err != nil {
+			log.Error("no se pudo emitir la alerta de persecucion",
+				slog.String("zona", det.Zona),
+				slog.String("error", err.Error()))
+		}
+	}
+
+	for _, p := range resultado.Parciales {
+		if err := s.ventanas.RegistrarParcial(ctx, window.Pendiente{
+			Regla:      p.Regla,
+			Zona:       ev.Zone(),
+			Disparador: p.Disparador,
+			Faltante:   p.Faltante,
+			Expira:     p.Expira,
+		}); err != nil {
+			log.Warn("no se pudo registrar la coincidencia parcial del vehiculo",
+				slog.String("regla", p.Regla),
+				slog.String("error", err.Error()))
+		}
+	}
+
 	return nil
 }
 
 // emitir persiste, publica y registra una alerta detectada.
-func (s *Service) emitir(ctx context.Context, det rules.Deteccion, ev *canonical.Event, momento time.Time) error {
+//
+// claveSupresion es el ambito dentro del cual una alerta de este tipo se
+// considera repetida. Para las reglas de zona es la zona; para la persecucion
+// es el vehiculo, porque dos coches distintos huyendo por la misma zona son
+// dos incidentes y suprimir el segundo seria perderlo.
+func (s *Service) emitir(ctx context.Context, det rules.Deteccion, ev *canonical.Event,
+	momento time.Time, claveSupresion string) error {
+
 	log := obs.LoggerFrom(ctx, s.log)
 
-	// Supresion: si ya hay una alerta equivalente vigente en la zona, no se
-	// emite otra. Sin esto, cada evento nuevo de la ventana vuelve a disparar
-	// la misma regla sobre la misma evidencia, y un solo incidente en curso
-	// llena la tabla de alertas casi identicas.
+	// Supresion: si ya hay una alerta equivalente vigente, no se emite otra.
+	// Sin esto, cada evento nuevo de la ventana vuelve a disparar la misma
+	// regla sobre la misma evidencia, y un solo incidente en curso llena la
+	// tabla de alertas casi identicas.
 	zona := det.Zona
 
-	reservada, err := s.ventanas.ReservarAlerta(ctx, det.Tipo, zona)
+	reservada, err := s.ventanas.ReservarAlerta(ctx, det.Tipo, claveSupresion)
 	if err != nil {
 		return err
 	}

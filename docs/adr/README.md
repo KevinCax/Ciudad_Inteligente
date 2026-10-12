@@ -35,6 +35,8 @@ defender.
 | [008](008-observabilidad-y-slo.md) | Observabilidad y objetivos de nivel de servicio | Aceptado |
 | [009](009-orquestacion-de-tareas-periodicas.md) | Orquestación de tareas periódicas: retirar Airflow | Aceptado |
 | [010](010-contenerizacion-y-orquestacion.md) | Contenerización y orquestación: Docker Compose, sin Kubernetes | Aceptado |
+| [011](011-aviso-a-terceros.md) | Aviso a terceros: servicio propio con registro de despacho | Aceptado |
+| [012](012-recorridos-por-calle.md) | Recorridos por calle: OSRM en la capa de borde | Aceptado |
 
 El enunciado exige un mínimo de seis, incluido obligatoriamente el de
 plataforma de despliegue. **Hay diez aceptados.**
@@ -42,7 +44,7 @@ plataforma de despliegue. **Hay diez aceptados.**
 ## Cobertura de las decisiones obligatorias
 
 La sección 4.2 del enunciado enumera ocho decisiones que deben quedar
-registradas. Las diez de aquí las cubren todas:
+registradas. Las doce de aquí las cubren todas:
 
 | Decisión exigida (§4.2) | ADR |
 |---|---|
@@ -55,9 +57,13 @@ registradas. Las diez de aquí las cubren todas:
 | Seguridad y privacidad de datos | [007](007-privacidad-y-datos-personales.md) |
 | Observabilidad y SLO | [008](008-observabilidad-y-slo.md) |
 
-Los otros dos —[002](002-lenguaje-y-runtime.md) y
-[003](003-organizacion-del-repositorio.md)— no los exige el enunciado, pero
-documentan decisiones que condicionan a todas las demás.
+Los otros cuatro —[002](002-lenguaje-y-runtime.md),
+[003](003-organizacion-del-repositorio.md),
+[011](011-aviso-a-terceros.md) y
+[012](012-recorridos-por-calle.md)— no los exige el enunciado. Los dos primeros
+documentan decisiones que condicionan a todas las demás; los dos últimos responden a
+requisitos posteriores: poder demostrar a qué organismo se avisó de cada
+incidente, y poder seguir sobre el mapa el recorrido de uno.
 
 Todos documentan decisiones aplicadas en el código y verificadas sobre el
 sistema en ejecución.

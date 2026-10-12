@@ -48,8 +48,21 @@ type Config struct {
 	ReglasDesdeEntorno map[string]string
 
 	// Correlacion
-	SeenTTL          time.Duration
-	WindowTTL        time.Duration
+	SeenTTL   time.Duration
+	WindowTTL time.Duration
+
+	// VehicleWindowTTL acota la ventana indexada por vehiculo. Es mayor que
+	// WindowTTL porque una huida se extiende mas que cualquier ventana de
+	// zona: el coche cambia de zona justamente para salir de ella.
+	VehicleWindowTTL time.Duration
+
+	// PlateHMACKey es la MISMA llave que usan persister e indexer. El
+	// correlator no la necesita para proteger un dato que escriba —no escribe
+	// placas en ningun sitio— sino para que el seudonimo con el que indexa la
+	// ventana de vehiculo coincida con el archivado en PostgreSQL. Si
+	// difirieran, una alerta de persecucion no se podria cruzar con el
+	// historico del vehiculo que la provoco.
+	PlateHMACKey     string
 	AlertSuppressTTL time.Duration
 	RuleVersion      string
 
@@ -85,6 +98,8 @@ func Load() (*Config, error) {
 
 		SeenTTL:          envDuration("CORRELATION_SEEN_TTL", 10*time.Minute),
 		WindowTTL:        envDuration("CORRELATION_WINDOW_TTL", 10*time.Minute),
+		VehicleWindowTTL: envDuration("VEHICLE_WINDOW_TTL", 20*time.Minute),
+		PlateHMACKey:     env("PLATE_HMAC_KEY", ""),
 		AlertSuppressTTL: envDuration("ALERT_SUPPRESS_TTL", 5*time.Minute),
 		RuleVersion:      env("RULE_VERSION", "1.0"),
 
@@ -135,8 +150,11 @@ func reglasDesdeEntorno() map[string]string {
 		"RULE_VENTANA_ACCIDENTE",
 		"RULE_VENTANA_INCENDIO",
 		"RULE_VENTANA_VELOCIDAD",
+		"RULE_VENTANA_PERSECUCION",
 		"RULE_UMBRAL_VELOCIDAD",
+		"RULE_VELOCIDAD_MAXIMA_PLAUSIBLE",
 		"RULE_MIN_LPR_VELOCIDAD",
+		"RULE_MIN_INFRACCIONES_PERSECUCION",
 		"RULE_CAIDA_DESDE",
 		"RULE_CAIDA_HASTA",
 		"RULE_UMBRAL_DECIBELES",

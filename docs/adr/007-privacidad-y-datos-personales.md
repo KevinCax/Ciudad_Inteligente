@@ -219,7 +219,7 @@ despreciables y deja un identificador más manejable en registros y tableros.
 
 | Aspecto | Decisión |
 |---|---|
-| Ubicación | On-premise, en el entorno del persister |
+| Ubicación | On-premise, en el entorno del persister, el indexer y el correlator |
 | Versionado | **Nunca** en el repositorio; `.env` está en `.gitignore` |
 | Generación | `openssl rand -hex 32` |
 | Respaldo | Cifrado, con procedimiento documentado y custodia separada |
@@ -230,6 +230,38 @@ advierten en el registro**: `"PLATE_HMAC_KEY no configurada: las placas se
 archivarán en claro en la nube"`. Se prefirió advertir a impedir el arranque
 para no convertir un descuido de configuración en una caída del sistema de
 seguridad ciudadana.
+
+### 3.6 El correlator también custodia la llave, por un motivo distinto
+
+Al incorporarse la correlación por vehículo
+([ADR-011](011-aviso-a-terceros.md) documenta el servicio hermano; la regla
+vive en el correlator), un tercer servicio pasó a necesitar la llave. Conviene
+ser preciso sobre por qué, porque **no** es el mismo motivo que en los otros
+dos.
+
+El persister y el indexer la usan para que el dato personal no cruce a la nube:
+tokenizan en la frontera. El correlator no escribe nada fuera de la LAN y, por
+tanto, no tiene ninguna frontera que proteger. La usa para **indexar por
+seudónimo la ventana de correlación de vehículo** en Redis, y eso resuelve dos
+problemas a la vez:
+
+1. **La clave de Redis deja de ser una matrícula.** La ventana por vehículo es
+   un `corr:plate:<seudónimo>`. Si se indexara por la placa en claro, un `SCAN`
+   sobre Redis devolvería el listado de matrículas que han circulado por la
+   ciudad en los últimos veinte minutos: el estado transitorio de la
+   correlación se habría convertido en un fichero de vehículos.
+
+2. **El seudónimo coincide con el archivado.** Al usar la misma llave, el
+   identificador con el que el correlator agrupa es idéntico al que el
+   persister escribe en PostgreSQL. Eso es lo que permite partir de una alerta
+   de persecución y reconstruir el histórico del vehículo sin que la placa en
+   claro salga nunca de la LAN.
+
+Esto amplía la superficie de custodia de dos servicios a tres, y es una
+contrapartida real: una llave en más entornos es una llave con más
+oportunidades de filtrarse. Se acepta porque la alternativa —indexar por la
+placa en claro— es estrictamente peor en el mismo eje que esta decisión intenta
+proteger.
 
 ## 4. Lo que esta decisión NO protege
 
@@ -254,6 +286,36 @@ justamente lo que hace rastreable el dato.
 Es un compromiso consciente: sin seudónimo estable no hay correlación por
 vehículo, y sin correlación por vehículo la cámara de lectura de placas pierde
 su propósito.
+
+**Actualización (2026-10-03): esto ha dejado de ser un efecto colateral.**
+
+Cuando se escribió esta sección, el rastreo de un vehículo era una
+*posibilidad* que el diseño no impedía. Ya no: el sistema incorpora una regla
+de correlación que encadena las infracciones de un mismo vehículo a través de
+varias zonas, y un tablero que dibuja su recorrido sobre el mapa. El rastreo
+pasó de riesgo residual a funcionalidad deliberada.
+
+El cambio no altera qué dato se guarda —no se almacena nada que no se
+almacenara antes— pero sí altera lo que hay que declarar ante el área legal. Un
+dato que *podría* usarse para seguir a una persona y un dato que *se usa* para
+eso no son equivalentes a efectos de proporcionalidad, aunque la base de datos
+sea idéntica.
+
+Tres límites acotan el uso, y conviene que figuren por escrito:
+
+- **El plazo.** El rastreo alcanza `RETENCION_DIAS_PLACA` días (90 por
+  defecto). Pasado ese plazo el trabajo de retención elimina
+  `placa_vehicular` del payload y el vehículo deja de ser seguible. No es una
+  limitación técnica: es el plazo que acota la vigilancia.
+- **El disparador.** La regla no se activa por circular, sino por acumular
+  infracciones **y** existir un botón de pánico en la misma zona. Un vehículo
+  que respeta las normas no genera ninguna cadena por mucho que circule.
+- **El alcance de la ventana.** La correlación en vivo solo mira diez minutos
+  atrás; el histórico de noventa días requiere una consulta explícita a la base,
+  que es una acción deliberada de un operador y no un proceso automático.
+
+Queda pendiente que la Municipalidad apruebe expresamente este uso, como ya
+estaba pendiente la aprobación de los plazos de retención.
 
 ### 4.2 La retención está implementada, con un matiz
 

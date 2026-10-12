@@ -76,8 +76,12 @@ regla de alerta que salta si alguna supera los 5 000 eventos.
 
 ## 3. El motor
 
-Por cada evento consumido, el motor evalúa **las cuatro reglas** contra la
-ventana de su zona. Cada regla devuelve una de tres cosas:
+Por cada evento consumido, el motor evalúa **las cuatro reglas de zona**
+contra la ventana de su zona. Si además el evento trae placa, recorre un
+segundo camino independiente y evalúa la **regla de vehículo** contra una
+ventana distinta, indexada por el seudónimo de la matrícula.
+
+Cada regla devuelve una de tres cosas:
 
 | Devuelve | Significa | Qué ocurre |
 |---|---|---|
@@ -88,7 +92,7 @@ ventana de su zona. Cada regla devuelve una de tres cosas:
 El tercer caso es el menos habitual en un motor de reglas, y el que hace
 medible la tasa de falsos positivos. Se explica en el apartado 6.
 
-## 4. Las cuatro reglas
+## 4. Las cinco reglas
 
 ### 4.1 `possible_robbery` — posible robo en curso
 
@@ -156,15 +160,138 @@ No tiene disparador ni complemento: es acumulativa. Exigir tres lecturas y no
 una es lo que la distingue de un vehículo suelto que va rápido, que no es un
 problema de la zona sino de ese conductor.
 
-### 4.5 Resumen
+### 4.5 `vehicle_pursuit` — huida de un vehículo
 
-| Alerta | Disparador | Complemento | Ventana | Confianza |
+**Condición:** al menos **2** infracciones del **mismo vehículo**, más un botón
+de pánico en alguna de las zonas donde infringió.
+**Ventana:** 10 minutos · **Confianza:** 0.92
+
+Esta regla rompe la premisa de todas las anteriores: **no agrupa por zona, sino
+por vehículo**. Y tiene que hacerlo, porque la secuencia que modela es
+precisamente la que una ventana de zona no puede ver.
+
+El caso: alguien pulsa el botón de pánico por un robo en la zona 1. Dos minutos
+después, una cámara de semáforo capta una placa cruzando en rojo en esa misma
+zona. Dos minutos más tarde, la misma placa aparece a 112 km/h ya en la zona 4.
+Para la ventana de la zona 1, el tercer evento no existe; para la de la zona 4,
+no existe el primero. Por separado son una alerta de robo y una multa de
+tránsito. Juntas son una huida.
+
+Cuenta como infracción una lectura con el campo `infraccion` presente —que es
+como se modela el cruce en rojo— o una velocidad por encima del umbral.
+
+**El botón de pánico es el ancla, deliberadamente.** Sin él, dos infracciones
+del mismo coche son solo un conductor imprudente, y emitir «persecución» por
+eso llenaría el tablero de falsas huidas hasta que el operador dejara de
+mirarlo. Y el pánico debe estar en una zona por la que el vehículo pasó: uno al
+otro lado de la ciudad no guarda relación con ese coche, y aceptarlo
+convertiría la regla en un generador de coincidencias.
+
+De los botones de pánico candidatos se toma **el más próximo en el tiempo a la
+primera infracción**, no el más antiguo. La diferencia aparece cuando hay dos
+incidentes solapados en la misma zona: con «el más antiguo», una huida que
+empieza a las 10:30 se anclaría en un pulsador de las 10:22 que no tuvo nada
+que ver, y la alerta mezclaría dos incidentes en una sola cadena de evidencias.
+Se vio ocurrir sobre el sistema en ejecución. Tampoco se exige que el pánico
+*preceda* a la infracción, porque la víctima puede pulsar el botón después de
+ver arrancar el coche.
+
+**La regla se evalúa también al llegar un botón de pánico.** Un pulsador no
+trae matrícula, de modo que no alimenta ninguna ventana de vehículo; pero es el
+ancla de la regla, y al llegar hay que revisar si algún vehículo de esa zona ya
+tenía una cadena a medias esperándolo. Sin esa segunda rama existe una carrera
+real: Kafka reparte por zona, así que la lectura de la zona 9 y el pánico de la
+zona 1 viajan en **particiones distintas** y su orden relativo no está
+garantizado. Si la partición del pánico va retrasada —lo normal tras un
+reinicio o un rebalanceo— la regla se evalúa antes de que exista su ancla y la
+alerta no se emite nunca. Se observó con diecisiete segundos de desfase: la
+cadena completa quedó solo como coincidencia parcial.
+
+**La cadena se comprueba contra la física.** Antes de contar las infracciones,
+el motor descarta aquellas a las que el vehículo no pudo llegar desde la
+anterior. Se mide la distancia geodésica entre las dos apariciones y el tiempo
+transcurrido; si la velocidad media que haría falta supera
+`RULE_VELOCIDAD_MAXIMA_PLAUSIBLE` (70 km/h por defecto), el enlace se rompe.
+
+No es un límite de velocidad, es un límite de **credibilidad**. Y el valor está
+medido, no estimado: preguntando al callejero real de la capital —el mismo que
+dibuja los recorridos— un automóvil **a flujo libre, sin un solo semáforo en
+rojo**, promedia entre 26 y 34 km/h *medidos en línea recta*, porque las calles
+no van rectas:
+
+| Tramo | En recta | Por calle | Tiempo | Velocidad en recta |
 |---|---|---|---|---|
-| `possible_robbery` | botón de pánico | vehículo > 80 km/h | 2 min | 0.85 |
-| `accident` | reporte de accidente | señal acústica | 5 min | 0.85 |
-| `accident` + caída | ídem, con caída 80→40 | ídem | 5 min | **0.95** |
-| `fire` | reporte de incendio | explosión o > 100 dB | 5 min | 0.95 |
-| `traffic_speed_violation` | — | 3 lecturas > 80 km/h | 2 min | 0.90 |
+| zona 1 → zona 4 | 1.69 km | 2.74 km | 204 s | 30 km/h |
+| zona 4 → zona 9 | 2.56 km | 3.32 km | 325 s | 28 km/h |
+| zona 10 → zona 6 | 6.57 km | 7.77 km | 699 s | 34 km/h |
+
+El tope se fija en **el doble** de esa cota superior: un vehículo que huye
+saltándose las normas cabe de sobra, y un salto imposible no.
+
+El primer valor que se puso fue 150 km/h, y era un error de criterio: eso es un
+límite *físico*, no de tráfico. Descartaba la teletransportación pero daba por
+buenas cadenas que ningún coche podría recorrer en una ciudad con semáforos
+—por ejemplo cruzar 6.57 km en 200 segundos, que son 118 km/h en recta y
+exigirían 140 km/h de media por asfalto—. Sin él, el
+motor encadenaba una lectura de la zona 10 con otra de la zona 6 dos segundos
+después: **6.57 km que exigirían 11 834 km/h**. Se verificó sobre el sistema en
+ejecución, y la alerta resultante situaba el incidente en una zona por la que el
+coche nunca pasó.
+
+Un salto imposible casi nunca es un coche rápido. Es una placa **mal leída** por
+la cámara —basta un dígito confundido— o una placa **clonada**, que son
+problemas corrientes de los lectores automáticos. Por eso se descarta esa
+lectura y la cadena continúa con la siguiente que sí sea alcanzable, en vez de
+cortarse: lo que no encaja es el dato, no el incidente. Y se mide siempre contra
+la última aparición *aceptada*, no contra la inmediatamente anterior, para que
+una sola lectura falsa no desplace el punto de referencia y arrastre consigo a
+las lecturas buenas que vengan después.
+
+Una aparición sin coordenadas no se puede juzgar, y ante la duda se acepta:
+descartar por falta de dato convertiría un hueco de información en una
+correlación perdida, que es el más caro de los dos errores.
+
+Esto tiene una consecuencia práctica en las pruebas. El escenario `persecucion`
+envía los eventos **fechados hacia atrás**, y las separaciones **no están
+escritas a mano: se le preguntan al motor de rutas** en cada ejecución. Entre la
+zona 1 y la zona 4 el callejero dice 3 min 23 s, y entre la 4 y la 9 otros
+5 min 25 s, de modo que el incidente completo abarca algo más de nueve minutos.
+El resultado medido sobre el sistema: 34 km/h de media, que es exactamente lo
+que da de sí ese tramo.
+
+Enviados de corrido, como estaban al principio, la cadena exigía 5 083 km/h
+entre la zona 1 y la zona 4. Con separaciones de 150 segundos escritas a ojo
+—el intento intermedio— seguía siendo un 36 % más rápida que el flujo libre.
+Un escenario así no prueba el sistema: prueba una situación que no puede
+ocurrir, y si el motor la acepta nadie se entera hasta que alguien mira el mapa.
+
+El multiplicador `-trafico` modela la congestión: `1.0` es flujo libre, que es
+lo que hace un vehículo que huye saltándose las señales, y `1.8` se aproxima a
+una hora pico en esta ciudad.
+
+Dos detalles de implementación que condicionan el resto:
+
+- **La ventana se indexa por el seudónimo HMAC de la placa, no por la placa.**
+  Así la clave de Redis no es una matrícula legible con un `SCAN`, y además
+  coincide con el identificador archivado en PostgreSQL, lo que permite cruzar
+  la alerta con el histórico del vehículo. Ver
+  [ADR-007 §3.6](adr/007-privacidad-y-datos-personales.md).
+- **`RULE_VENTANA_PERSECUCION` no puede superar `CORRELATION_WINDOW_TTL`.** El
+  ancla vive en la ventana de zona: mirar más atrás que ella sería buscar un
+  evento que Redis ya podó, y la regla dejaría de disparar sin que nada lo
+  indicara. El correlator comprueba la relación al arrancar y se niega a seguir
+  si no se cumple.
+
+### 4.6 Resumen
+
+| Alerta | Disparador | Complemento | Agrupa por | Ventana | Confianza |
+|---|---|---|---|---|---|
+| `possible_robbery` | botón de pánico | vehículo > 80 km/h | zona | 2 min | 0.85 |
+| `accident` | reporte de accidente | señal acústica | zona | 5 min | 0.85 |
+| `accident` + caída | ídem, con caída 80→40 | ídem | zona | 5 min | **0.95** |
+| `fire` | reporte de incendio | explosión o > 100 dB | zona | 5 min | 0.95 |
+| `traffic_speed_violation` | — | 3 lecturas > 80 km/h | zona | 2 min | 0.90 |
+| `vehicle_pursuit` | botón de pánico | 2 infracciones del mismo vehículo | **vehículo** | 10 min | 0.92 |
 
 La confianza es un **número real entre 0 y 1**, no un entero. Declararla entera
 parece inocuo y no lo es: al redondear, 0.85, 0.90 y 0.95 se guardarían las

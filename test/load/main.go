@@ -16,6 +16,7 @@
 //	go run . -escenario bulk
 //	go run . -escenario enunciado
 //	go run . -escenario tormenta -alertas 100
+//	go run . -escenario persecucion
 package main
 
 import (
@@ -43,23 +44,46 @@ import (
 
 func main() {
 	var (
-		url       = flag.String("url", "http://localhost:8000", "URL base del ingestor")
-		apiKey    = flag.String("api-key", "", "valor de la cabecera X-API-Key")
-		escenario = flag.String("escenario", "sostenido", "sostenido | rafaga | alertas | bulk | enunciado | tormenta")
-		rps       = flag.Int("rps", 10, "eventos por segundo en el escenario sostenido")
-		duracion  = flag.Duration("duracion", 30*time.Second, "duracion del escenario sostenido")
-		conc      = flag.Int("concurrencia", 50, "peticiones simultaneas maximas")
-		lote      = flag.Int("lote", 20, "eventos por lote en el escenario bulk")
-		cuantas   = flag.Int("alertas", 100, "alertas simultaneas en el escenario tormenta")
+		url        = flag.String("url", "http://localhost:8000", "URL base del ingestor")
+		apiKey     = flag.String("api-key", "", "valor de la cabecera X-API-Key")
+		escenario  = flag.String("escenario", "sostenido", "sostenido | rafaga | alertas | bulk | enunciado | tormenta | persecucion | verificar")
+		rps        = flag.Int("rps", 10, "eventos por segundo en el escenario sostenido")
+		duracion   = flag.Duration("duracion", 30*time.Second, "duracion del escenario sostenido")
+		conc       = flag.Int("concurrencia", 50, "peticiones simultaneas maximas")
+		lote       = flag.Int("lote", 20, "eventos por lote en el escenario bulk")
+		cuantas    = flag.Int("alertas", 100, "alertas simultaneas en el escenario tormenta")
+		trafico    = flag.Float64("trafico", 1.0, "multiplicador de congestion en el escenario persecucion: 1.0 es flujo libre")
+		incidentes = flag.Int("incidentes", 1, "cuantas persecuciones independientes generar, cada una con su vehiculo y su ruta")
 		// El correlator se publica en el host en 8001, no en 8080: dentro de
 		// Docker sigue en 8080, pero ese puerto choca a menudo con otro
 		// programa en las maquinas de desarrollo. Ver CORRELATOR_HOST_PORT.
 		correlador = flag.String("correlator", "http://localhost:8001", "URL base del correlator, para consultarlo y leer sus metricas")
+		motorRutas = flag.String("osrm", "http://localhost:5001", "URL base del motor de rutas, para tomar de el los tiempos de viaje reales")
+		urlGrafana = flag.String("grafana", "http://localhost:3000", "URL base de Grafana, para verificar lo que mostrara el tablero")
+		usrGrafana = flag.String("grafana-usuario", "admin", "usuario de Grafana")
+		pwdGrafana = flag.String("grafana-clave", "", "clave de Grafana")
+		tableros   = flag.String("tableros", "deploy/grafana/provisioning/dashboards", "carpeta con los tableros provisionados")
+		umbralKmH  = flag.Float64("umbral-kmh", 70, "referencia PROPIA de la verificacion, medida sobre el callejero: no se toma del sistema")
+		umbralSist = flag.Float64("umbral-sistema", 0, "tope que tiene configurado el correlator, para contrastarlo con la referencia")
+		ventanaMax = flag.Duration("ventana", 15*time.Minute, "ventana de correlacion mas larga configurada")
 		espera     = flag.Duration("espera", 3*time.Minute, "cuanto esperar a que cierre la ventana en el escenario enunciado")
 	)
 	flag.Parse()
 
 	urlCorrelator = strings.TrimSuffix(*correlador, "/")
+	urlOSRM = strings.TrimSuffix(*motorRutas, "/")
+
+	// La verificacion no genera carga: comprueba que lo ya correlacionado sea
+	// coherente y que el tablero lo muestre. Sale antes de construir el
+	// generador porque no lo necesita.
+	if *escenario == "verificar" {
+		fmt.Printf("Verificacion de coherencia de extremo a extremo\n")
+		g := nuevoGrafana(*urlGrafana, *usrGrafana, *pwdGrafana)
+		if verificar(g, *umbralKmH, *umbralSist, *ventanaMax, *tableros) > 0 {
+			os.Exit(1)
+		}
+		return
+	}
 	gen := &generador{url: *url, apiKey: *apiKey, concurrencia: *conc}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -87,8 +111,11 @@ func main() {
 	case "tormenta":
 		fmt.Printf("Tormenta: %d incidentes simultaneos sobre las zonas de la ciudad\n\n", *cuantas)
 		res = gen.tormenta(ctx, *cuantas, urlCorrelator)
+	case "persecucion":
+		fmt.Printf("Persecucion: un mismo vehiculo encadena infracciones tras un robo\n\n")
+		res = gen.persecucion(ctx, *trafico, *incidentes)
 	default:
-		log.Fatalf("escenario desconocido: %q (usa sostenido, rafaga, alertas, bulk, enunciado o tormenta)", *escenario)
+		log.Fatalf("escenario desconocido: %q (usa sostenido, rafaga, alertas, bulk, enunciado, tormenta, persecucion o verificar)", *escenario)
 	}
 
 	res.imprimir()
@@ -663,6 +690,196 @@ func (g *generador) tormenta(ctx context.Context, cuantas int, correlator string
 // exactamente cual fallo, en que indice y por que. Un generador que solo
 // enviara lotes sin mirar la respuesta dejaria esa promesa sin verificar
 // contra el sistema levantado.
+// persecucion reproduce la cadena que ninguna regla de zona puede ver.
+//
+// Un robo en una zona, el mismo vehiculo saltandose un semaforo, y despues
+// circulando a velocidad excesiva ya en otra zona. Por separado son una alerta
+// de robo y una multa de transito; la regla de persecucion las enlaza por la
+// matricula y las convierte en un solo incidente.
+//
+// Los tres hechos van separados por segundos y no por minutos para que la
+// demostracion sea viable: la ventana de la regla son 10 minutos, de modo que
+// la cadena entra igual y nadie tiene que esperar delante de la pantalla.
+// rutasDeHuida son recorridos independientes, uno por incidente.
+//
+// Los conjuntos de zonas son DISJUNTOS a proposito. Si dos incidentes
+// compartieran zona, el boton de panico de uno podria anclar la huida del
+// otro: la regla busca el pulsador mas proximo entre los de las zonas que el
+// vehiculo piso, y con incidentes solapados en la misma zona esa eleccion deja
+// de ser evidente. Para una demostracion eso no se explica solo.
+var rutasDeHuida = [][3]string{
+	{"zona_1", "zona_4", "zona_9"},
+	{"zona_2", "zona_6", "zona_16"},
+	{"zona_11", "zona_7", "zona_3"},
+	{"zona_12", "zona_13", "zona_14"},
+	{"zona_18", "zona_17", "zona_19"},
+}
+
+func (g *generador) persecucion(ctx context.Context, factorTrafico float64, cuantos int) *resultados {
+	res := nuevosResultados()
+
+	if cuantos < 1 {
+		cuantos = 1
+	}
+	if cuantos > len(rutasDeHuida) {
+		fmt.Printf("  solo hay %d rutas disjuntas definidas; se generan esas\n\n", len(rutasDeHuida))
+		cuantos = len(rutasDeHuida)
+	}
+
+	for i := 0; i < cuantos; i++ {
+		if ctx.Err() != nil {
+			return res
+		}
+		if cuantos > 1 {
+			fmt.Printf("  --- incidente %d de %d ---\n", i+1, cuantos)
+		}
+		g.unaPersecucion(ctx, res, factorTrafico, rutasDeHuida[i], i)
+	}
+
+	fmt.Println("")
+	fmt.Println("  En el tablero de trazabilidad, la tabla de la izquierda lista un boton")
+	fmt.Println("  de panico por incidente. Al pulsar una fila, el mapa dibuja ESA cadena;")
+	fmt.Println("  al pulsar otra, la suya. El punto verde rotulado INICIO es donde empezo")
+	fmt.Println("  y el rojo rotulado FIN donde se le perdio la pista.")
+	fmt.Println("")
+
+	return res
+}
+
+// unaPersecucion emite la cadena de un solo incidente.
+func (g *generador) unaPersecucion(ctx context.Context, res *resultados,
+	factorTrafico float64, ruta [3]string, indice int) {
+
+	// Una matricula distinta por incidente. Repetirla fundiria las cadenas en
+	// una sola, porque la correlacion agrupa precisamente por vehiculo.
+	matricula := fmt.Sprintf("P%03dFUG", 777+indice)
+
+	origen, paso, destino := ruta[0], ruta[1], ruta[2]
+
+	// Los tiempos NO se inventan: se preguntan al callejero real.
+	//
+	// Es la diferencia entre probar el sistema y probar una situacion
+	// imposible. Un boton de panico y, treinta segundos despues, una lectura
+	// de placa a dos kilometros y medio, describe un coche que no existe: por
+	// esas calles, con esos semaforos, el trayecto son cinco minutos largos
+	// aunque no se respete ninguna senal. Si el escenario genera esa cadena y
+	// el motor la acepta, la prueba no demuestra nada.
+	viajeOrigenPaso := TiempoDeViaje(coordenadasDe(origen), coordenadasDe(paso), factorTrafico)
+	viajePasoDestino := TiempoDeViaje(coordenadasDe(paso), coordenadasDe(destino), factorTrafico)
+
+	// La camara del cruce esta a la vuelta de la esquina del pulsador: el
+	// vehiculo tarda segundos, no minutos, en llegar a ella.
+	const salidaDeLaZona = 25 * time.Second
+
+	// Se construye la linea de tiempo hacia atras desde "hace un momento",
+	// para que todo el incidente quepa en la ventana de correlacion y el
+	// operador lo vea recien ocurrido al abrir el tablero.
+	const margen = 30 * time.Second
+
+	desdeElFinal := func(d time.Duration) int {
+		return int((d + margen).Seconds())
+	}
+
+	tDestino := time.Duration(0)
+	tPaso := tDestino + viajePasoDestino
+	tRojo := tPaso + viajeOrigenPaso
+	tPanico := tRojo + salidaDeLaZona
+
+	fmt.Printf("  Tiempos tomados del callejero (factor de trafico %.1f):\n", factorTrafico)
+	fmt.Printf("    %s -> %s   %s\n", origen, paso, viajeOrigenPaso)
+	fmt.Printf("    %s -> %s   %s\n", paso, destino, viajePasoDestino)
+	fmt.Printf("    el incidente completo abarca %s\n\n", tPanico)
+
+	pasos := []struct {
+		descripcion string
+		zona        string
+		evento      map[string]any
+	}{
+		{
+			"boton de panico por robo",
+			origen,
+			eventoHace(origen, "panic.button", desdeElFinal(tPanico), map[string]any{
+				"tipo_de_alerta":            "panico",
+				"identificador_dispositivo": "BTN-FUGA",
+				"user_context":              "movil",
+			}),
+		},
+		{
+			// La velocidad va por encima del umbral ademas de la infraccion:
+			// asi esta misma lectura completa tambien la regla de robo, que
+			// exige panico mas vehiculo a alta velocidad en la zona.
+			"camara de semaforo: cruce en rojo",
+			origen,
+			eventoHace(origen, "sensor.lpr", desdeElFinal(tRojo), map[string]any{
+				"placa_vehicular":    matricula,
+				"infraccion":         "semaforo_rojo",
+				"velocidad_estimada": 95,
+				"modelo_vehiculo":    "sedan",
+				"color_vehiculo":     "gris",
+				"ubicacion_sensor":   "cruce_6a_avenida",
+			}),
+		},
+		{
+			"lectura de placa a alta velocidad",
+			paso,
+			eventoHace(paso, "sensor.lpr", desdeElFinal(tPaso), map[string]any{
+				"placa_vehicular":    matricula,
+				"velocidad_estimada": 112,
+				"ubicacion_sensor":   "via_rapida_sur",
+			}),
+		},
+		{
+			"ultima lectura, ya en otra zona",
+			destino,
+			eventoHace(destino, "sensor.lpr", desdeElFinal(tDestino), map[string]any{
+				"placa_vehicular":    matricula,
+				"velocidad_estimada": 118,
+				"ubicacion_sensor":   "bulevar_liberacion",
+			}),
+		},
+	}
+
+	for i, p := range pasos {
+		if ctx.Err() != nil {
+			return
+		}
+		fmt.Printf("  %d. %-36s %-8s  %s\n", i+1, p.descripcion, p.zona,
+			p.evento["timestamp"])
+		g.enviar(ctx, p.evento, res)
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	fmt.Printf("     se esperan possible_robbery en %s y vehicle_pursuit en %s o %s\n\n",
+		origen, paso, destino)
+}
+
+// eventoEn construye un evento ya situado en las coordenadas de la zona.
+func eventoEn(zona, tipo string, payload map[string]any) map[string]any {
+	z := coordenadas(zona)
+	return evento(tipo, zona, z.lat, z.lon, payload)
+}
+
+// eventoHace es eventoEn con una marca de tiempo explicita, situada N segundos
+// en el pasado.
+//
+// Los demas escenarios omiten el timestamp a proposito, para que lo ponga el
+// enriquecedor del ingestor y quede ejercitado. Aqui no se puede: el motor
+// comprueba que un vehiculo haya podido recorrer fisicamente la distancia
+// entre dos apariciones, y si los cuatro eventos de una persecucion llegan
+// separados por un segundo, el coche tendria que ir a cinco mil kilometros por
+// hora entre la zona 1 y la zona 4. La cadena seria rechazada, con razon.
+//
+// Fechar los eventos hacia atras resuelve las dos cosas a la vez: los datos
+// son fisicamente coherentes y la demostracion sigue durando segundos, en vez
+// de obligar a esperar siete minutos delante de la pantalla.
+func eventoHace(zona, tipo string, segundos int, payload map[string]any) map[string]any {
+	ev := eventoEn(zona, tipo, payload)
+	ev["timestamp"] = time.Now().UTC().
+		Add(-time.Duration(segundos) * time.Second).
+		Format(time.RFC3339Nano)
+	return ev
+}
+
 func (g *generador) bulk(ctx context.Context, tam int) *resultados {
 	res := nuevosResultados()
 
@@ -1271,10 +1488,10 @@ func secuenciaAccidente(zona string) []map[string]any {
 		// regla filtrara antes por velocidad alta, la segunda desapareceria
 		// y la caida no podria detectarse nunca.
 		evento("sensor.lpr", zona, z.lat, z.lon, map[string]any{
-			"placa_vehicular": "P555AAA", "velocidad_estimada": 90,
+			"placa_vehicular": placaFija(zona, "ACC"), "velocidad_estimada": 90,
 		}),
 		evento("sensor.lpr", zona, z.lat, z.lon, map[string]any{
-			"placa_vehicular": "P555AAA", "velocidad_estimada": 25,
+			"placa_vehicular": placaFija(zona, "ACC"), "velocidad_estimada": 25,
 		}),
 	}
 }
@@ -1296,8 +1513,10 @@ func secuenciaVelocidad(zona string) []map[string]any {
 	z := coordenadas(zona)
 	var out []map[string]any
 	for i, v := range []int{88, 96, 104} {
+		// Tres vehiculos distintos: la regla de exceso de velocidad cuenta
+		// lecturas rapidas en la zona, no reincidencias de un mismo coche.
 		out = append(out, evento("sensor.lpr", zona, z.lat, z.lon, map[string]any{
-			"placa_vehicular":    fmt.Sprintf("P%03dXYZ", i+1),
+			"placa_vehicular":    placaFija(zona, fmt.Sprintf("V%c%c", 'L', 'A'+i)),
 			"velocidad_estimada": v,
 			"ubicacion_sensor":   "autopista_norte_01",
 		}))
@@ -1315,6 +1534,21 @@ func coordenadas(zona string) struct {
 		}
 	}
 	return zonas[0]
+}
+
+// placaFija deriva una matricula estable de la zona y un sufijo.
+//
+// Antes estas secuencias usaban la misma matricula en TODAS las zonas, de modo
+// que un unico vehiculo aparecia circulando por los 22 distritos a la vez. Para
+// el mapa de calor daba igual, pero en cuanto se rastrea por vehiculo el dato
+// se vuelve absurdo: ese coche omnipresente acumula cientos de lecturas y tapa
+// cualquier recorrido real.
+func placaFija(zona, sufijo string) string {
+	n := 0
+	for _, r := range zona {
+		n = (n*31 + int(r)) % 1000
+	}
+	return fmt.Sprintf("P%03d%s", n, sufijo)
 }
 
 func placa() string {

@@ -28,6 +28,46 @@ type Config struct {
 	VentanaIncendio  time.Duration
 	VentanaVelocidad time.Duration
 
+	// VentanaPersecucion es el plazo durante el cual se siguen las
+	// apariciones de un mismo vehiculo. Es mayor que las demas porque un
+	// vehiculo que huye cruza varias zonas y la cadena se extiende en el
+	// tiempo: con dos minutos solo se verian las infracciones de una esquina.
+	//
+	// NO puede superar CORRELATION_WINDOW_TTL. El ancla de la regla es un
+	// boton de panico, que vive en la ventana de ZONA: si esta ventana mirase
+	// mas atras que aquella, buscaria un evento que Redis ya podo y la regla
+	// dejaria de disparar sin que nada lo indicara. El correlator comprueba
+	// la relacion al arrancar y se niega a seguir si no se cumple.
+	VentanaPersecucion time.Duration
+
+	// MinInfraccionesPersecucion es cuantas infracciones del mismo vehiculo
+	// hacen falta para hablar de huida. Con una sola no hay patron: un coche
+	// que se salta un semaforo es una multa, no una persecucion.
+	MinInfraccionesPersecucion int
+
+	// VelocidadMaximaPlausible acota, en km/h, la velocidad media EN LINEA
+	// RECTA que puede haber llevado un vehiculo entre dos apariciones.
+	//
+	// No es un limite de velocidad: es un limite de CREDIBILIDAD. Sin el, el
+	// motor encadena una lectura de la zona 10 con otra de la zona 6 dos
+	// segundos despues, que son 6.57 km y exigirian 11834 km/h. Se vio
+	// ocurrir. Un salto asi casi nunca es un coche rapido: es una placa mal
+	// leida por la camara, o una placa clonada, que son problemas reales y
+	// frecuentes en los lectores automaticos.
+	//
+	// El valor se midio, no se estimo. Preguntando al callejero real de la
+	// capital por los tramos entre zonas, un automovil a flujo libre —sin un
+	// solo semaforo en rojo— promedia entre 26 y 34 km/h MEDIDOS EN RECTA,
+	// porque las calles no van en linea recta: zona_1 a zona_4 son 1.69 km a
+	// vuelo de pajaro y 2.74 km de asfalto. El tope se fija en el doble de esa
+	// cota superior, de modo que un vehiculo que huye saltandose las normas
+	// cabe de sobra y un salto imposible no.
+	//
+	// Un tope de 150 km/h, que es lo que habia antes, solo descartaba la
+	// teletransportacion: dejaba pasar cadenas que ningun coche podria haber
+	// recorrido en una ciudad con trafico.
+	VelocidadMaximaPlausible float64
+
 	// UmbralVelocidad es el minimo para considerar un vehiculo "a alta
 	// velocidad", tanto en sensor.lpr como en sensor.speed.
 	UmbralVelocidad float64
@@ -62,17 +102,20 @@ type Config struct {
 // ConfigPorDefecto son los umbrales de la guia del proyecto.
 func ConfigPorDefecto() Config {
 	return Config{
-		VentanaRobo:         2 * time.Minute,
-		VentanaAccidente:    5 * time.Minute,
-		VentanaIncendio:     5 * time.Minute,
-		VentanaVelocidad:    2 * time.Minute,
-		UmbralVelocidad:     80,
-		MinLPRVelocidad:     3,
-		CaidaDesde:          80,
-		CaidaHasta:          40,
-		UmbralDecibeles:     100,
-		AccidenteExigeCaida: false,
-		Version:             "1.0",
+		VentanaRobo:                2 * time.Minute,
+		VentanaAccidente:           5 * time.Minute,
+		VentanaIncendio:            5 * time.Minute,
+		VentanaVelocidad:           2 * time.Minute,
+		VentanaPersecucion:         15 * time.Minute,
+		MinInfraccionesPersecucion: 2,
+		VelocidadMaximaPlausible:   70,
+		UmbralVelocidad:            80,
+		MinLPRVelocidad:            3,
+		CaidaDesde:                 80,
+		CaidaHasta:                 40,
+		UmbralDecibeles:            100,
+		AccidenteExigeCaida:        false,
+		Version:                    "1.0",
 	}
 }
 
@@ -84,11 +127,24 @@ type Ventana struct {
 }
 
 // Evento es un evento ya normalizado para evaluar reglas.
+//
+// Zona es redundante en las reglas de zona, donde todos los eventos comparten
+// la de la ventana. Hace falta para la ventana de vehiculo, que por definicion
+// cruza zonas: sin este campo no se podria saber donde ocurrio cada aparicion
+// del coche.
 type Evento struct {
 	ID      string
 	Tipo    string
+	Zona    string
 	Momento time.Time
 	Payload map[string]any
+
+	// Lat y Lon son punteros: nil significa "se desconoce la ubicacion", que
+	// no es lo mismo que el punto (0,0). La distincion importa porque las
+	// reglas que miden distancia deben abstenerse ante un dato ausente en
+	// lugar de calcular con una coordenada inventada.
+	Lat *float64
+	Lon *float64
 }
 
 // Deteccion es una regla que se cumplio.
@@ -466,8 +522,11 @@ func DesdeResumenes(rs []window.Resumen) []Evento {
 		out = append(out, Evento{
 			ID:      r.EventID,
 			Tipo:    r.EventType,
+			Zona:    r.Zone,
 			Momento: momento,
 			Payload: r.Payload,
+			Lat:     r.Lat,
+			Lon:     r.Lon,
 		})
 	}
 	return out

@@ -53,7 +53,22 @@ type Tarea struct {
 	Nombre string
 	// Hora es el momento de ejecucion en formato "HH:MM", hora local del
 	// proceso. Se documenta la zona horaria en el despliegue.
+	//
+	// Se usa para el trabajo pesado que debe correr fuera de horas: agregar el
+	// dia, purgar el historico.
 	Hora string
+
+	// Cada ejecuta la tarea a intervalos en lugar de a una hora fija.
+	//
+	// Es excluyente con Hora. Existe para el trabajo que acompana al flujo en
+	// vez de cerrarlo: calcular la ruta de las alertas nuevas no tiene sentido
+	// a las tres de la madrugada, porque para entonces el operador ya miro el
+	// mapa y lo vio vacio.
+	//
+	// El minimo es un minuto, que es el tic del planificador. Pedir menos no
+	// daria error pero tampoco se cumpliria, y una promesa que no se cumple es
+	// peor que una restriccion declarada.
+	Cada time.Duration
 	// Correr ejecuta el trabajo. Los parametros llegan vacios en las
 	// ejecuciones programadas.
 	Correr func(context.Context, Parametros) (Resultado, error)
@@ -101,8 +116,19 @@ func New(rdb *redis.Client, tz string, obs Observador, log *slog.Logger) (*Sched
 // al ejecutarla: un error de configuracion debe impedir el arranque, no
 // descubrirse a las tres de la madrugada.
 func (s *Scheduler) Registrar(t Tarea) error {
-	if _, err := time.Parse("15:04", t.Hora); err != nil {
-		return fmt.Errorf("la tarea %q tiene una hora invalida %q: use HH:MM", t.Nombre, t.Hora)
+	segunHora := t.Hora != ""
+	segunIntervalo := t.Cada > 0
+
+	if segunHora == segunIntervalo {
+		return fmt.Errorf("la tarea %q debe indicar Hora o Cada, y solo una de las dos", t.Nombre)
+	}
+	if segunHora {
+		if _, err := time.Parse("15:04", t.Hora); err != nil {
+			return fmt.Errorf("la tarea %q tiene una hora invalida %q: use HH:MM", t.Nombre, t.Hora)
+		}
+	}
+	if segunIntervalo && t.Cada < time.Minute {
+		return fmt.Errorf("la tarea %q pide ejecutarse cada %s, pero el planificador tiene un tic de un minuto", t.Nombre, t.Cada)
 	}
 	if t.Correr == nil {
 		return fmt.Errorf("la tarea %q no tiene funcion de ejecucion", t.Nombre)
@@ -126,6 +152,12 @@ func (s *Scheduler) Correr(ctx context.Context) {
 		slog.String("zona_horaria", s.ubicacion.String()))
 
 	for _, t := range s.tareas {
+		if t.Cada > 0 {
+			s.log.Info("tarea programada",
+				slog.String("tarea", t.Nombre),
+				slog.String("cada", t.Cada.String()))
+			continue
+		}
 		s.log.Info("tarea programada",
 			slog.String("tarea", t.Nombre),
 			slog.String("hora", t.Hora))
@@ -155,11 +187,34 @@ func (s *Scheduler) revisar(ctx context.Context) {
 	actual := ahora.Format("15:04")
 
 	for _, t := range s.tareas {
+		// Las tareas por intervalo se consultan en cada tic: quien decide si
+		// toca es el cerrojo, cuya clave cambia con la ventana.
+		if t.Cada > 0 {
+			s.ejecutar(ctx, t, ahora)
+			continue
+		}
 		if t.Hora != actual {
 			continue
 		}
 		s.ejecutar(ctx, t, ahora)
 	}
+}
+
+// cerrojo devuelve la clave y la vigencia del cerrojo de una tarea.
+//
+// Para las tareas diarias la clave lleva la fecha y dura casi un dia: asi la
+// purga corre una sola vez aunque el proceso se reinicie dentro del mismo
+// minuto. Para las tareas por intervalo la clave lleva el NUMERO DE VENTANA y
+// dura lo que el intervalo, de modo que el propio cerrojo es el que marca el
+// ritmo: el planificador consulta cada minuto y solo entra quien toma la
+// ventana. Sin esto haria falta guardar en memoria la ultima ejecucion, que se
+// perderia en cada reinicio y no serviria con varias instancias.
+func (s *Scheduler) cerrojo(t Tarea, ahora time.Time) (string, time.Duration) {
+	if t.Cada > 0 {
+		ventana := ahora.Unix() / int64(t.Cada.Seconds())
+		return fmt.Sprintf("jobs:ejecutada:%s:v%d", t.Nombre, ventana), t.Cada
+	}
+	return fmt.Sprintf("jobs:ejecutada:%s:%s", t.Nombre, ahora.Format("2006-01-02")), 23 * time.Hour
 }
 
 // ejecutar toma el cerrojo y corre la tarea.
@@ -169,9 +224,9 @@ func (s *Scheduler) revisar(ctx context.Context) {
 // corra una sola vez al dia aunque el proceso se reinicie dentro del mismo
 // minuto. Por eso la clave incluye la fecha y el TTL dura casi un dia entero.
 func (s *Scheduler) ejecutar(ctx context.Context, t Tarea, ahora time.Time) {
-	clave := fmt.Sprintf("jobs:ejecutada:%s:%s", t.Nombre, ahora.Format("2006-01-02"))
+	clave, ttl := s.cerrojo(t, ahora)
 
-	tomado, err := s.rdb.SetNX(ctx, clave, ahora.Format(time.RFC3339), 23*time.Hour).Result()
+	tomado, err := s.rdb.SetNX(ctx, clave, ahora.Format(time.RFC3339), ttl).Result()
 	if err != nil {
 		s.log.Error("no se pudo consultar el cerrojo de la tarea",
 			slog.String("tarea", t.Nombre),
@@ -180,8 +235,8 @@ func (s *Scheduler) ejecutar(ctx context.Context, t Tarea, ahora time.Time) {
 		return
 	}
 	if !tomado {
-		// Otra instancia la ejecuto, o ya corrio hoy. No es un error.
-		s.log.Debug("la tarea ya se ejecuto hoy", slog.String("tarea", t.Nombre))
+		// Otra instancia la ejecuto, o ya corrio en esta ventana. No es error.
+		s.log.Debug("la tarea ya se ejecuto en esta ventana", slog.String("tarea", t.Nombre))
 		s.observador.Omitida(t.Nombre, "ya_ejecutada")
 		return
 	}

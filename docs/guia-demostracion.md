@@ -451,11 +451,95 @@ En Grafana, el tablero **SLO y presupuesto de error** ya lo muestra calculado.
 
 ---
 
+## Paso 12b · La cadena de un vehículo, y a quién se avisó
+
+Es el paso que responde dos preguntas que el resto de la demostración no
+responde: *¿qué evento se correlaciona con cuál?* y *¿a quién avisamos?*
+
+```bash
+./make.sh load persecucion
+```
+
+Reproduce una secuencia concreta: alguien pulsa el botón de pánico por un robo
+en la zona 1; dos segundos después una cámara de semáforo capta una placa
+cruzando en rojo en esa misma zona; luego la misma placa aparece a 112 km/h en
+la zona 4, y a 118 en la zona 9.
+
+Lo que hay que señalar es **por qué las reglas de zona no pueden ver esto**: en
+la ventana de la zona 1 no existe la lectura de la zona 4, y en la de la zona 4
+no existe el botón de pánico. Por separado son un robo y una multa. La regla
+`vehicle_pursuit` las enlaza por la matrícula.
+
+Comprobar la cadena completa, en orden causal:
+
+```bash
+docker exec ciudad-postgres psql -U ciudad -d ciudades -c "SELECT e.ts_utc::time AS hora, e.zone, e.event_type, coalesce(e.payload->>'infraccion','-') AS infraccion, coalesce(e.payload->>'velocidad_estimada','-') AS velocidad, left(coalesce(e.payload->>'placa_vehicular','-'),14) AS vehiculo FROM alerts a CROSS JOIN LATERAL jsonb_array_elements_text(a.evidence) AS ev(id) JOIN events e ON e.event_id = ev.id::uuid WHERE a.type='vehicle_pursuit' ORDER BY e.ts_utc"
+```
+
+Y los avisos que esa alerta generó:
+
+```bash
+docker exec ciudad-postgres psql -U ciudad -d ciudades -c "SELECT alert_type, organismo, canal, estado, creado_en::time FROM notifications WHERE alert_type='vehicle_pursuit' ORDER BY creado_en DESC LIMIT 10"
+```
+
+**Decirlo con claridad si preguntan:** el canal es `simulado`. El sistema
+decide a qué organismos corresponde cada alerta y lo registra con su hora y su
+resultado, pero **no existe integración con bomberos, policía ni ambulancias:
+nadie acude**. La trazabilidad está completa; la entrega, no. Presentarlo de
+otra forma es lo único que puede hundir esta parte de la defensa.
+
+Dos detalles que suelen preguntarse:
+
+- **La matrícula que aparece no es la matrícula.** Es un seudónimo HMAC. Pero
+  es *estable*, de modo que el mismo vehículo produce siempre el mismo
+  identificador y se puede seguir sin que la placa en claro salga de la LAN.
+- **El rastreo caduca.** A los 90 días el trabajo de retención elimina el campo
+  y el vehículo deja de ser seguible. Es el plazo que acota la vigilancia, no
+  una limitación técnica.
+
+---
+
+## Paso 12c · Verificar que lo mostrado es coherente
+
+Despues de cualquier escenario:
+
+```bash
+./make.sh verificar
+```
+
+Comprueba once cosas y devuelve codigo distinto de cero si alguna falla, de
+modo que sirve igual en una demostracion que encadenado en CI.
+
+Lo que mira, y por que cada una:
+
+| Comprobacion | Que detecta |
+|---|---|
+| Las evidencias existen y caen dentro de la ventana que la alerta declara | Una alerta que se contradice a si misma |
+| Las reglas de zona no usan evidencias de otra zona | Correlaciones imposibles por construccion |
+| Ningun tramo exige mas de 70 km/h de media entre dos lecturas | Un vehiculo que habria tenido que volar |
+| El tope configurado es creible | Que alguien haya relajado el umbral del motor |
+| El recorrido por calles cabe en el tiempo transcurrido | Lo mismo, pero contra el callejero real |
+| Toda alerta genero aviso, y sin duplicados | Emergencias de las que no se avisa a nadie |
+| Las once consultas del tablero devuelven datos | Que el tablero vaya a salir vacio |
+
+Dos detalles que conviene saber al explicarlo:
+
+- **Las consultas van por la API de Grafana**, no directamente a PostgreSQL.
+  Es deliberado: ya ocurrio una vez que los datos estaban perfectos y los
+  paneles aparecian vacios por una propiedad mal puesta en el origen de datos.
+  Una verificacion que solo mirase la base no lo habria detectado.
+- **La referencia de velocidad es propia de la verificacion**, no se lee de la
+  configuracion del sistema. Al principio si se leia, y eso hacia que un
+  correlator mal configurado pasara la prueba sin rechistar: una verificacion
+  que toma sus expectativas del sistema que verifica no verifica nada.
+
+---
+
 ## Paso 13 · Los tableros
 
 | Herramienta | Dirección | Qué enseñar |
 |---|---|---|
-| **Grafana** | http://localhost:3000 | Los tres tableros, en la carpeta *Ciudad Inteligente* |
+| **Grafana** | http://localhost:3000 | Los cuatro tableros, en la carpeta *Ciudad Inteligente* |
 | Kafka-UI | http://localhost:8081 | Los topics, y que `events.dlq` está vacío |
 | Kibana | http://localhost:5601 | Búsqueda histórica |
 | Prometheus | http://localhost:9090 | Las 14 reglas de alerta, en *Alerts* |
@@ -467,7 +551,7 @@ Prometheus no consulta nada hasta que se escribe una expresión. No está roto.
 
 Las dos pantallas que **no exigen escribir nada** y lucen bien en una demo:
 
-- **Status → Target health** — los seis objetivos en verde. Demuestra que
+- **Status → Target health** — los siete objetivos en verde. Demuestra que
   Prometheus está recogiendo métricas de los cinco microservicios.
 - **Alerts** — las 14 reglas, cada una con su expresión. Demuestra que el
   sistema avisa sin que nadie mire un tablero, que es lo que el enunciado pide

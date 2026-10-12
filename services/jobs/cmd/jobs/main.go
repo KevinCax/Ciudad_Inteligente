@@ -29,6 +29,7 @@ import (
 	"ciudadinteligente/jobs/internal/esearch"
 	"ciudadinteligente/jobs/internal/httpapi"
 	"ciudadinteligente/jobs/internal/obs"
+	"ciudadinteligente/jobs/internal/rutas"
 	"ciudadinteligente/jobs/internal/scheduler"
 	"ciudadinteligente/jobs/internal/store"
 )
@@ -116,6 +117,16 @@ func run() error {
 		Nombre: "agregados_diarios",
 		Hora:   cfg.HoraAgregados,
 		Correr: tareaAgregados(almacen, log),
+	}); err != nil {
+		return err
+	}
+
+	// Recorridos por calle. Por intervalo y no a una hora fija: su resultado
+	// se consulta en vivo sobre el mapa, no en el informe del dia siguiente.
+	if err := plan.Registrar(scheduler.Tarea{
+		Nombre: "rutas_de_alertas",
+		Cada:   cfg.IntervaloRutas,
+		Correr: tareaRutas(almacen, rutas.NewCliente(cfg.OSRMURL, cfg.OSRMTimeout), cfg, log),
 	}); err != nil {
 		return err
 	}
@@ -288,4 +299,107 @@ func salud(almacen *store.Store, rdb *redis.Client, cfg *config.Config) func(con
 			"checks":    checks,
 		}
 	}
+}
+
+// tareaRutas calcula el recorrido por calles de las alertas recientes.
+//
+// Corre cada minuto y no una vez al dia como las demas, porque su resultado
+// se mira en vivo: calcular a las tres de la madrugada el recorrido de un
+// incidente de media tarde no le sirve a nadie, el operador ya vio el mapa
+// vacio.
+//
+// Es trabajo de este servicio y no del correlator por una razon de diseno:
+// pedir una ruta es una llamada HTTP a un motor externo, y meterla en el
+// camino critico de la deteccion significaria que un fallo del motor de rutas
+// retrasa la emision de una alerta de incendio. El recorrido es presentacion;
+// la alerta es la funcion del sistema.
+func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config,
+	log *slog.Logger) func(context.Context, scheduler.Parametros) (scheduler.Resultado, error) {
+
+	return func(ctx context.Context, _ scheduler.Parametros) (scheduler.Resultado, error) {
+		pendientes, err := almacen.AlertasSinRuta(ctx,
+			cfg.RutasHorasAtras, cfg.RutasMaxIntentos, cfg.RutasPorPasada)
+		if err != nil {
+			return scheduler.Resultado{}, err
+		}
+		if len(pendientes) == 0 {
+			return scheduler.Resultado{Afectadas: 0}, nil
+		}
+
+		var calculadas, sinRuta, fallidas int64
+
+		for _, a := range pendientes {
+			puntos := puntosDistintos(a.Puntos)
+
+			// Con un solo punto no hay recorrido que trazar. Se registra como
+			// "sin ruta" en vez de dejarlo pendiente, o la tarea lo reintentaria
+			// cada minuto para siempre.
+			if len(puntos) < 2 {
+				sinRuta++
+				if err := almacen.GuardarRuta(ctx, a.AlertID, store.RutaSinRuta, 0, 0, nil,
+					"la alerta ocurre en un solo punto: no hay recorrido"); err != nil {
+					log.Warn("no se pudo registrar la alerta sin recorrido",
+						slog.String("alert_id", a.AlertID),
+						slog.String("error", err.Error()))
+				}
+				continue
+			}
+
+			ruta, err := cliente.Calcular(ctx, puntos)
+
+			switch {
+			case errors.Is(err, rutas.ErrSinRuta):
+				sinRuta++
+				_ = almacen.GuardarRuta(ctx, a.AlertID, store.RutaSinRuta, 0, 0, nil,
+					"el motor no encontro camino entre los puntos")
+
+			case err != nil:
+				fallidas++
+				log.Warn("fallo el calculo del recorrido",
+					slog.String("alert_id", a.AlertID),
+					slog.String("error", err.Error()))
+				_ = almacen.GuardarRuta(ctx, a.AlertID, store.RutaFallida, 0, 0, nil, err.Error())
+
+			default:
+				calculadas++
+				// Se guarda en el orden de GeoJSON, [lon, lat], que es como lo
+				// devuelve el motor y como lo espera el mapa de Grafana.
+				geo := make([][2]float64, 0, len(ruta.Geometria))
+				for _, p := range ruta.Geometria {
+					geo = append(geo, [2]float64{p.Lon, p.Lat})
+				}
+				if err := almacen.GuardarRuta(ctx, a.AlertID, store.RutaCalculada,
+					ruta.DistanciaM, ruta.DuracionS, geo, ""); err != nil {
+					log.Warn("no se pudo guardar el recorrido",
+						slog.String("alert_id", a.AlertID),
+						slog.String("error", err.Error()))
+				}
+			}
+		}
+
+		return scheduler.Resultado{
+			Afectadas: calculadas + sinRuta + fallidas,
+			Detalle: map[string]any{
+				"calculadas": calculadas,
+				"sin_ruta":   sinRuta,
+				"fallidas":   fallidas,
+			},
+		}, nil
+	}
+}
+
+// puntosDistintos descarta los puntos repetidos consecutivos.
+//
+// Dos lecturas en la misma esquina producen coordenadas identicas, y el motor
+// de rutas las trata como un tramo de longitud cero que no aporta nada a la
+// geometria pero si cuenta para el limite de puntos de la peticion.
+func puntosDistintos(crudos [][2]float64) []rutas.Punto {
+	var out []rutas.Punto
+	for _, p := range crudos {
+		if n := len(out); n > 0 && out[n-1].Lat == p[0] && out[n-1].Lon == p[1] {
+			continue
+		}
+		out = append(out, rutas.Punto{Lat: p[0], Lon: p[1]})
+	}
+	return out
 }
