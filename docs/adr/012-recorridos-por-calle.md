@@ -117,6 +117,59 @@ fila por alerta**, no una fila por vértice. Un recorrido urbano tiene cientos d
 vértices y desgranarlos multiplicaría el tamaño de la tabla sin que nadie
 consulte jamás un vértice suelto: siempre se lee la ruta entera.
 
+### 3.3 bis El recorrido cubre el rastro completo, y se recalcula
+
+La alerta se emite en cuanto el patrón se completa, y el vehículo sigue
+circulando después. Una ruta calculada una sola vez, al nacer la alerta,
+terminaría en la última evidencia y no en el último contacto, que es justo lo
+que interesa: por dónde fue y dónde se le perdió la pista.
+
+Por eso el recorrido pasa por **las evidencias y por el rastro posterior del
+vehículo**, que termina cuando entre dos apariciones pasan más de 30 minutos
+(`RUTAS_SILENCIO_MIN`). Es una política y no una medida: si un coche reaparece
+pasado ese plazo, eso ya no es la misma huida. El tablero usa el mismo valor
+escrito en su propia consulta, de modo que si se cambia en uno hay que cambiarlo
+en el otro.
+
+La ventana de correlación (15 minutos) y el rastro (hasta 30 de silencio) son
+cosas distintas y no deben confundirse. La ventana es de **detección**: tiene
+que ser corta, porque una alerta de robo que llega media hora tarde no sirve. El
+rastro es de **reconstrucción**: se hace sobre el archivo y no tiene por qué
+heredar ese límite.
+
+`alert_routes` guarda con qué se calculó cada ruta —cuántos puntos y qué
+intervalo abarcan—, y la tarea la rehace cuando el rastro tiene más puntos que
+ella. Sin eso la línea se quedaría atrás conforme el vehículo sigue apareciendo
+en cámaras. El contador de intentos solo sube cuando el cálculo *falla*: si
+subiera con cada recálculo correcto, una ruta que se ha ido alargando acabaría
+con los intentos agotados y, si el siguiente fallara, no se reintentaría nunca.
+
+Lo que el sistema no puede decir es **por qué** se perdió el contacto: si el
+vehículo se detuvo, salió de la ciudad o sencillamente dejó de haber cámaras.
+Distinguirlo exigiría un inventario de cobertura de sensores que no existe.
+
+### 3.3 ter Cuándo se traza un recorrido, y cuándo no
+
+Un recorrido es la trayectoria de **un** vehículo que se aleja de un hecho. Solo
+se calcula si la alerta incluye un botón de pánico y exactamente un vehículo
+identificado. En los demás casos la fila de `alert_routes` queda en `sin_ruta`
+con un detalle que dice «no aplica».
+
+La primera versión calculaba una ruta para toda alerta, y la verificación de
+extremo a extremo lo cazó: en un incendio las evidencias son un reporte y un
+sensor acústico en el mismo instante, y en un exceso de velocidad son tres coches
+distintos. Unirlos con una ruta por calles dibuja una línea que nadie recorrió
+(«el recorrido estimado son 125 s y solo pasaron 0»). No se veía porque el tablero
+solo enseña rutas de incidentes con pulsador, pero estaban en la base.
+
+Se deja la fila explícita en lugar de omitir la alerta: sin ella parecería tener
+el cálculo pendiente para siempre, y nadie distinguiría «todavía no» de «no
+aplica».
+
+Un pulsador que no generó ninguna alerta —el falso positivo del enunciado— sí
+aparece en el mapa, como un único punto INICIO. Un mapa vacío parece un fallo del
+tablero cuando es justo lo que hay que enseñar.
+
 ### 3.4 Qué se dibuja y qué no
 
 El panel superpone dos capas:
@@ -153,10 +206,11 @@ consciente y tiene un riesgo asociado, que se enumera abajo.
   que acordarse de ejecutarlo en una instalación nueva.
 - **El mapa envejece.** OpenStreetMap cambia; el extracto descargado no. Una
   calle nueva no aparecerá hasta que alguien rehaga los índices.
-- **No hay contraste entre la ruta y el tiempo real.** La tabla guarda la
-  distancia y la duración que estima el motor, pero nada compara todavía esa
-  duración con el tiempo transcurrido entre las dos lecturas. Sería la forma
-  natural de detectar que el recorrido propuesto no es creíble.
+- **El contraste con el tiempo real es parcial.** La verificación compara la
+  duración que estima el motor con el tiempo transcurrido entre el primer y el
+  último punto, y falla si el trayecto no cabía. Lo hace sobre las rutas
+  calculadas, no al momento de emitir la alerta: el correlator todavía no
+  consulta el callejero, solo mide la velocidad en línea recta.
 
 ## 5. Impacto en el negocio
 

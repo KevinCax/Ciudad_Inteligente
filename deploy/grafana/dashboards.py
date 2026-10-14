@@ -709,9 +709,16 @@ def opciones_mapa(capas):
 # vehiculo se detuvo, salio de la ciudad, o sencillamente dejo de haber camaras.
 # Distinguirlo exigiria un inventario de cobertura de sensores que el sistema no
 # tiene. Conviene no sugerir lo contrario al presentarlo.
+#
+# El propio boton de panico entra SIEMPRE en el incidente, tenga o no alertas.
+# Un pulsador que no encontro eventos que lo acompanaran es el caso de falso
+# positivo del enunciado, y un mapa vacio parece un fallo del tablero cuando es
+# justo lo que hay que ensenar: un incidente de un solo punto.
 RASTRO = (
                      "WITH cadena AS (\n"
-                     "  SELECT DISTINCT ev.id::uuid AS eid\n"
+                     "  SELECT '$incidente'::uuid AS eid\n"
+                     "  UNION\n"
+                     "  SELECT ev.id::uuid\n"
                      "  FROM alerts a\n"
                      "  CROSS JOIN LATERAL jsonb_array_elements_text(a.evidence) AS ev(id)\n"
                      "  WHERE jsonb_exists(a.evidence, '$incidente')\n"

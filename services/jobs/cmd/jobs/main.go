@@ -301,12 +301,19 @@ func salud(almacen *store.Store, rdb *redis.Client, cfg *config.Config) func(con
 	}
 }
 
-// tareaRutas calcula el recorrido por calles de las alertas recientes.
+// tareaRutas calcula el recorrido por calles de las alertas recientes, de
+// principio a ultimo contacto.
 //
 // Corre cada minuto y no una vez al dia como las demas, porque su resultado
 // se mira en vivo: calcular a las tres de la madrugada el recorrido de un
 // incidente de media tarde no le sirve a nadie, el operador ya vio el mapa
 // vacio.
+//
+// Recalcula, ademas de calcular. La alerta se emite en cuanto el patron se
+// completa y el vehiculo sigue circulando despues: cada camara que lo vea de
+// nuevo alarga el rastro, y la ruta que se calculo al nacer la alerta se queda
+// corta. Por eso se compara el numero de puntos con el que tenia la ruta y se
+// rehace cuando hay mas.
 //
 // Es trabajo de este servicio y no del correlator por una razon de diseno:
 // pedir una ruta es una llamada HTTP a un motor externo, y meterla en el
@@ -318,7 +325,7 @@ func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config
 
 	return func(ctx context.Context, _ scheduler.Parametros) (scheduler.Resultado, error) {
 		pendientes, err := almacen.AlertasSinRuta(ctx,
-			cfg.RutasHorasAtras, cfg.RutasMaxIntentos, cfg.RutasPorPasada)
+			cfg.RutasHorasAtras, cfg.RutasMaxIntentos, cfg.RutasPorPasada, cfg.RutasSilencioMin)
 		if err != nil {
 			return scheduler.Resultado{}, err
 		}
@@ -329,6 +336,31 @@ func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config
 		var calculadas, sinRuta, fallidas int64
 
 		for _, a := range pendientes {
+			calculo := store.Calculo{
+				AlertID: a.AlertID,
+				Puntos:  len(a.Puntos),
+			}
+			if n := len(a.Puntos); n > 0 {
+				calculo.Desde, calculo.Hasta = a.Puntos[0].Momento, a.Puntos[n-1].Momento
+			}
+
+			// Si no hay un vehiculo huyendo de un pulsador, no hay recorrido que
+			// trazar. Se deja constancia explicita en lugar de omitir la alerta:
+			// sin la fila, la alerta pareceria tener el calculo pendiente para
+			// siempre y nadie sabria distinguir "todavia no" de "no aplica".
+			if !a.Aplica {
+				sinRuta++
+				calculo.Estado = store.RutaSinRuta
+				calculo.Detalle = "no aplica: el recorrido solo se traza cuando hay un " +
+					"boton de panico y un unico vehiculo implicado"
+				if err := almacen.GuardarRuta(ctx, calculo); err != nil {
+					log.Warn("no se pudo registrar la alerta sin recorrido",
+						slog.String("alert_id", a.AlertID),
+						slog.String("error", err.Error()))
+				}
+				continue
+			}
+
 			puntos := puntosDistintos(a.Puntos)
 
 			// Con un solo punto no hay recorrido que trazar. Se registra como
@@ -336,8 +368,9 @@ func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config
 			// cada minuto para siempre.
 			if len(puntos) < 2 {
 				sinRuta++
-				if err := almacen.GuardarRuta(ctx, a.AlertID, store.RutaSinRuta, 0, 0, nil,
-					"la alerta ocurre en un solo punto: no hay recorrido"); err != nil {
+				calculo.Estado = store.RutaSinRuta
+				calculo.Detalle = "el incidente ocurre en un solo punto: no hay recorrido"
+				if err := almacen.GuardarRuta(ctx, calculo); err != nil {
 					log.Warn("no se pudo registrar la alerta sin recorrido",
 						slog.String("alert_id", a.AlertID),
 						slog.String("error", err.Error()))
@@ -350,15 +383,16 @@ func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config
 			switch {
 			case errors.Is(err, rutas.ErrSinRuta):
 				sinRuta++
-				_ = almacen.GuardarRuta(ctx, a.AlertID, store.RutaSinRuta, 0, 0, nil,
-					"el motor no encontro camino entre los puntos")
+				calculo.Estado = store.RutaSinRuta
+				calculo.Detalle = "el motor no encontro camino entre los puntos"
 
 			case err != nil:
 				fallidas++
+				calculo.Estado = store.RutaFallida
+				calculo.Detalle = err.Error()
 				log.Warn("fallo el calculo del recorrido",
 					slog.String("alert_id", a.AlertID),
 					slog.String("error", err.Error()))
-				_ = almacen.GuardarRuta(ctx, a.AlertID, store.RutaFallida, 0, 0, nil, err.Error())
 
 			default:
 				calculadas++
@@ -368,12 +402,15 @@ func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config
 				for _, p := range ruta.Geometria {
 					geo = append(geo, [2]float64{p.Lon, p.Lat})
 				}
-				if err := almacen.GuardarRuta(ctx, a.AlertID, store.RutaCalculada,
-					ruta.DistanciaM, ruta.DuracionS, geo, ""); err != nil {
-					log.Warn("no se pudo guardar el recorrido",
-						slog.String("alert_id", a.AlertID),
-						slog.String("error", err.Error()))
-				}
+				calculo.Estado = store.RutaCalculada
+				calculo.DistanciaM, calculo.DuracionS = ruta.DistanciaM, ruta.DuracionS
+				calculo.Geometria = geo
+			}
+
+			if err := almacen.GuardarRuta(ctx, calculo); err != nil {
+				log.Warn("no se pudo guardar el recorrido",
+					slog.String("alert_id", a.AlertID),
+					slog.String("error", err.Error()))
 			}
 		}
 
@@ -393,13 +430,13 @@ func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config
 // Dos lecturas en la misma esquina producen coordenadas identicas, y el motor
 // de rutas las trata como un tramo de longitud cero que no aporta nada a la
 // geometria pero si cuenta para el limite de puntos de la peticion.
-func puntosDistintos(crudos [][2]float64) []rutas.Punto {
+func puntosDistintos(crudos []store.Punto) []rutas.Punto {
 	var out []rutas.Punto
 	for _, p := range crudos {
-		if n := len(out); n > 0 && out[n-1].Lat == p[0] && out[n-1].Lon == p[1] {
+		if n := len(out); n > 0 && out[n-1].Lat == p.Lat && out[n-1].Lon == p.Lon {
 			continue
 		}
-		out = append(out, rutas.Punto{Lat: p[0], Lon: p[1]})
+		out = append(out, rutas.Punto{Lat: p.Lat, Lon: p.Lon})
 	}
 	return out
 }

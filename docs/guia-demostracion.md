@@ -460,10 +460,29 @@ responde: *¿qué evento se correlaciona con cuál?* y *¿a quién avisamos?*
 ./make.sh load persecucion
 ```
 
-Reproduce una secuencia concreta: alguien pulsa el botón de pánico por un robo
-en la zona 1; dos segundos después una cámara de semáforo capta una placa
-cruzando en rojo en esa misma zona; luego la misma placa aparece a 112 km/h en
-la zona 4, y a 118 en la zona 9.
+Reproduce una huida como **un viaje de A a B**. Alguien pulsa el botón de
+pánico por un robo en la zona 1; un vehículo sale de ahí, una cámara junto al
+pulsador capta la placa cruzando en rojo, otra intermedia la capta a 112 km/h, y
+una última, cerca del destino, es la última que la ve. Después no hay más
+cámaras y se pierde el contacto.
+
+Las cámaras están **sobre el camino** que el motor de rutas calcula entre A y B,
+y las horas son las que corresponde a recorrerlo: 5.2 km por calles a 41 km/h de
+media son ocho minutos, no unos segundos. El escenario fecha los eventos hacia
+atrás para que la demostración siga durando segundos.
+
+Para ver varios pulsadores a la vez, cada uno con su propia huida:
+
+```bash
+./make.sh load persecucion        # un incidente
+CLAVE=$(grep -E '^INGESTOR_API_KEY=' deploy/.env | cut -d= -f2-)
+(cd test/load && go run . -escenario persecucion -incidentes 5 -api-key "$CLAVE")
+```
+
+En el tablero de trazabilidad, la tabla de la izquierda lista un botón de pánico
+por incidente. **Al pulsar una fila, el mapa dibuja esa huida**, de INICIO (donde
+se pulsó el botón) a ÚLTIMO CONTACTO (donde se perdió la pista); al pulsar otra,
+la suya.
 
 Lo que hay que señalar es **por qué las reglas de zona no pueden ver esto**: en
 la ventana de la zona 1 no existe la lectura de la zona 4, y en la de la zona 4

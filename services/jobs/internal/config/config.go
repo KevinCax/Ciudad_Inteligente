@@ -37,6 +37,12 @@ type Config struct {
 	RutasHorasAtras  int
 	RutasMaxIntentos int
 	RutasPorPasada   int
+
+	// RutasSilencioMin: el rastro de un vehiculo termina cuando entre dos
+	// apariciones pasan mas de estos minutos. Es una politica, no una medida.
+	// El tablero usa el mismo valor escrito en su consulta; si se cambia aqui,
+	// hay que cambiarlo alli.
+	RutasSilencioMin int
 	HoraRetencion    string
 
 	// Politica de retencion (ADR-007)
@@ -88,8 +94,9 @@ func Load() (*Config, error) {
 
 		// Tope por pasada, para que un atraso acumulado no convierta un tic de
 		// un minuto en una tarea de media hora que bloquee a las siguientes.
-		RutasPorPasada: envInt("RUTAS_POR_PASADA", 50),
-		HoraRetencion:  env("HORA_RETENCION", "03:30"),
+		RutasPorPasada:   envInt("RUTAS_POR_PASADA", 50),
+		RutasSilencioMin: envInt("RUTAS_SILENCIO_MIN", 30),
+		HoraRetencion:    env("HORA_RETENCION", "03:30"),
 
 		DiasPlaca:       envInt("RETENCION_DIAS_PLACA", 90),
 		DiasCoordenadas: envInt("RETENCION_DIAS_COORDENADAS", 365),

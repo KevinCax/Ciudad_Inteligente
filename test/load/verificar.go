@@ -415,20 +415,17 @@ func verificar(g *grafana, umbralKmH, umbralSistema float64, ventana time.Durati
 	// primera y la ultima lectura pasaron dos, el vehiculo no pudo hacerlo.
 	// Es la comprobacion de trafico, mas estricta que la de velocidad en
 	// recta, porque usa el callejero real.
+	//
+	// El intervalo es el CON QUE SE CALCULO la ruta (alert_routes.desde/hasta),
+	// no el de las evidencias de la alerta: la ruta cubre el rastro completo
+	// hasta el ultimo contacto, y comparar su duracion con un intervalo mas
+	// corto daria un fallo falso en cada incidente que siga despues de la alerta.
 	coherencia, err := g.consultar(`
-		WITH extremos AS (
-		  SELECT a.alert_id, r.duracion_s,
-		         min(e.ts_utc) AS primera, max(e.ts_utc) AS ultima
-		  FROM alerts a
-		  JOIN alert_routes r ON r.alert_id = a.alert_id AND r.estado = 'calculada'
-		  CROSS JOIN LATERAL jsonb_array_elements_text(a.evidence) AS ev(id)
-		  JOIN events e ON e.event_id = ev.id::uuid
-		  WHERE a.type = 'vehicle_pursuit' AND r.duracion_s > 0
-		  GROUP BY 1, 2
-		)
-		SELECT alert_id::text, duracion_s,
-		       extract(epoch FROM ultima - primera) AS transcurrido
-		FROM extremos`, desde, hasta)
+		SELECT r.alert_id::text AS alert_id, r.duracion_s,
+		       extract(epoch FROM r.hasta - r.desde) AS transcurrido
+		FROM alert_routes r
+		WHERE r.estado = 'calculada' AND r.duracion_s > 0
+		  AND r.desde IS NOT NULL AND r.hasta > r.desde`, desde, hasta)
 	if err != nil {
 		anotar("el recorrido cabe en el tiempo transcurrido", "", err)
 	} else if len(coherencia) == 0 {
@@ -490,13 +487,27 @@ func verificarTablero(g *grafana, ruta string, desde, hasta time.Time) []comprob
 		return []comprobacion{{nombre: "consultas del tablero", err: err}}
 	}
 
-	// El incidente que el tablero mostrara por defecto: el pulsador mas
-	// reciente, que es lo que elige la variable al abrirse.
+	// El incidente con el que se prueban los paneles: el pulsador mas reciente
+	// QUE HAYA GENERADO ALGUNA ALERTA.
+	//
+	// Con el pulsador mas reciente a secas, la verificacion falla o pasa segun
+	// un azar que no tiene que ver con el tablero: si ese pulsador resulto ser
+	// un falso positivo, sus paneles salen vacios aunque todo funcione. Lo que
+	// se quiere comprobar es que el mapa dibuje algo cuando hay algo que
+	// dibujar. Si ningun pulsador genero alertas se cae al mas reciente.
 	incidente := ""
-	if filas, err := g.consultar(
-		"SELECT event_id::text AS id FROM events WHERE event_type = 'panic.button' "+
-			"ORDER BY ts_utc DESC LIMIT 1", desde, hasta); err == nil && len(filas) > 0 {
-		incidente = texto(filas[0], "id")
+	for _, consulta := range []string{
+		"SELECT e.event_id::text AS id FROM events e " +
+			"WHERE e.event_type = 'panic.button' " +
+			"AND EXISTS (SELECT 1 FROM alerts a WHERE jsonb_exists(a.evidence, e.event_id::text)) " +
+			"ORDER BY e.ts_utc DESC LIMIT 1",
+		"SELECT event_id::text AS id FROM events WHERE event_type = 'panic.button' " +
+			"ORDER BY ts_utc DESC LIMIT 1",
+	} {
+		if filas, err := g.consultar(consulta, desde, hasta); err == nil && len(filas) > 0 {
+			incidente = texto(filas[0], "id")
+			break
+		}
 	}
 
 	var out []comprobacion
