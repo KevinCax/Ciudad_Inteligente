@@ -109,6 +109,24 @@ contribuir a ninguna correlación: una señal disponible que el sistema ignora.
 Es la regla que reproduce el primer renglón de la tabla 2.4 del enunciado:
 *zona 4, 22:05, placa XYZ123, 85 km/h → alerta de robo en curso*.
 
+**El vehículo tiene que haber podido estar en el botón.** Comparar solo la zona
+no basta: una zona mide varios kilómetros. Con tráfico realista apareció un robo
+«con huida» formado por un coche rápido leído a 1.7 km del botón **un minuto
+antes** de que lo pulsaran, es decir, un conductor cualquiera y un pulsador
+accidental. La regla exige ahora que, por la distancia y el tiempo que los
+separan, un mismo vehículo pudiera estar en ambos sitios (con un margen de 300 m,
+porque las zonas y los sensores no tienen precisión de GPS). Se acepta tanto el
+coche leído *después* —sale del botón— como el leído *antes* si le dio tiempo a
+llegar —la víctima pulsa cuando ve arrancar al coche—. Sin coordenadas no se
+puede juzgar y se acepta.
+
+**La ventana de cada alerta empieza en lo primero que ocurrió.** Cada regla fijaba
+el inicio en el de su disparador (el reporte en el accidente, el botón en el
+robo), pero el disparador casi nunca es lo primero: el sensor acústico oye el
+golpe y el reporte llega uno o dos minutos después. La alerta declaraba una
+ventana que *empezaba después* de parte de su propia evidencia. Ahora el inicio es
+el del evento más antiguo que sostiene la detección.
+
 ### 4.2 `accident` — accidente vial
 
 **Disparador:** un reporte ciudadano de tipo `accidente`.

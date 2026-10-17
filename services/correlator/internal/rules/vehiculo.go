@@ -119,6 +119,32 @@ func alcanzable(a, b Evento, maxKmH float64) bool {
 	return km/horas <= maxKmH
 }
 
+// Compatibles dice si un mismo vehiculo pudo estar en los dos eventos, en el
+// orden temporal que sea.
+//
+// A diferencia de CadenaPlausible, que mira de una aparicion a la SIGUIENTE, aqui
+// el orden no importa: un coche leido antes de que se pulse el boton pudo haber
+// estado en el boton al pulsarlo si le dio tiempo a llegar, y uno leido despues
+// pudo salir de el. Lo que no puede es haber estado a 1.7 km un minuto antes.
+//
+// Se descuenta un margen de 300 m: las zonas y los sensores no tienen la
+// precision de un GPS, y descartar un robo por un par de esquinas de diferencia
+// seria perderlo por precision que el dato no tiene. Sin coordenadas no se puede
+// juzgar, y ante la duda se acepta.
+func Compatibles(a, b Evento, maxKmH float64) bool {
+	if maxKmH <= 0 {
+		return true
+	}
+	km, ok := DistanciaKm(a, b)
+	if !ok {
+		return true
+	}
+
+	const margenKm = 0.3
+	horas := math.Abs(b.Momento.Sub(a.Momento).Hours())
+	return km-margenKm <= maxKmH*horas
+}
+
 // DistanciaKm devuelve la distancia en kilometros entre dos eventos, y si se
 // pudo calcular.
 //
@@ -214,7 +240,7 @@ func reglaPersecucionVehicular(v VentanaVehiculo, cfg Config) (*Deteccion, *Parc
 		zonas[e.Zona] = true
 	}
 
-	ancla, hayAncla := anclaDePanico(v.Panicos, zonas, desde, infracciones[0].Momento)
+	ancla, hayAncla := anclaDePanico(v.Panicos, zonas, desde, infracciones[0], cfg)
 	if !hayAncla {
 		// Coincidencia parcial: hay patron de huida pero falta el hecho que
 		// la origine. Si la ventana expira sin aparecer, cuenta como falso
@@ -263,7 +289,7 @@ func reglaPersecucionVehicular(v VentanaVehiculo, cfg Config) (*Deteccion, *Parc
 // la victima que pulsa el boton despues de ver al coche arrancar. Medir por
 // cercania cubre los dos ordenes sin privilegiar ninguno.
 func anclaDePanico(panicos []Evento, zonas map[string]bool, desde time.Time,
-	primeraInfraccion time.Time) (Evento, bool) {
+	primera Evento, cfg Config) (Evento, bool) {
 
 	var mejor Evento
 	var mejorDistancia time.Duration
@@ -274,7 +300,21 @@ func anclaDePanico(panicos []Evento, zonas map[string]bool, desde time.Time,
 			continue
 		}
 
-		distancia := p.Momento.Sub(primeraInfraccion)
+		// El pulsador puede llegar DESPUES de la primera infraccion —la victima
+		// pulsa cuando ve arrancar al coche— pero no mucho despues. Con
+		// trafico realista aparecio una "persecucion" cuyo coche se habia leido
+		// siete minutos antes del pulsador y a 6.7 km: un conductor cualquiera
+		// que pasa por delante de un boton pulsado por otra razon.
+		if p.Momento.Sub(primera.Momento) > cfg.VentanaRobo {
+			continue
+		}
+
+		// Y el vehiculo tuvo que poder estar en el pulsador.
+		if !Compatibles(p, primera, cfg.VelocidadMaximaPlausible) {
+			continue
+		}
+
+		distancia := p.Momento.Sub(primera.Momento)
 		if distancia < 0 {
 			distancia = -distancia
 		}

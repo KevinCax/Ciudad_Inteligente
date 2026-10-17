@@ -103,6 +103,13 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      # Los topics tienen que EXISTIR antes de que este servicio se una a su grupo
+      # de consumo, no solo el broker estar sano. Si se une a un topic que aun no
+      # esta creado, el grupo queda estable con CERO particiones asignadas y
+      # kafka-go no se entera cuando el topic aparece: el servicio arranca sin un
+      # solo error y no consume nada. En un Kafka recien creado pasa de verdad.
+      kafka-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     ports:
@@ -136,6 +143,13 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      # Los topics tienen que EXISTIR antes de que este servicio se una a su grupo
+      # de consumo, no solo el broker estar sano. Si se une a un topic que aun no
+      # esta creado, el grupo queda estable con CERO particiones asignadas y
+      # kafka-go no se entera cuando el topic aparece: el servicio arranca sin un
+      # solo error y no consume nada. En un Kafka recien creado pasa de verdad.
+      kafka-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     ports:
@@ -198,6 +212,13 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      # Los topics tienen que EXISTIR antes de que este servicio se una a su grupo
+      # de consumo, no solo el broker estar sano. Si se une a un topic que aun no
+      # esta creado, el grupo queda estable con CERO particiones asignadas y
+      # kafka-go no se entera cuando el topic aparece: el servicio arranca sin un
+      # solo error y no consume nada. En un Kafka recien creado pasa de verdad.
+      kafka-init:
+        condition: service_completed_successfully
     ports:
       - "8002:8002"
     environment:
@@ -235,6 +256,13 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      # Los topics tienen que EXISTIR antes de que este servicio se una a su grupo
+      # de consumo, no solo el broker estar sano. Si se une a un topic que aun no
+      # esta creado, el grupo queda estable con CERO particiones asignadas y
+      # kafka-go no se entera cuando el topic aparece: el servicio arranca sin un
+      # solo error y no consume nada. En un Kafka recien creado pasa de verdad.
+      kafka-init:
+        condition: service_completed_successfully
     ports:
       - "8003:8003"
     environment:
@@ -275,6 +303,13 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      # Los topics tienen que EXISTIR antes de que este servicio se una a su grupo
+      # de consumo, no solo el broker estar sano. Si se une a un topic que aun no
+      # esta creado, el grupo queda estable con CERO particiones asignadas y
+      # kafka-go no se entera cuando el topic aparece: el servicio arranca sin un
+      # solo error y no consume nada. En un Kafka recien creado pasa de verdad.
+      kafka-init:
+        condition: service_completed_successfully
     ports:
       - "8005:8005"
     environment:
@@ -362,6 +397,9 @@ services:
       OSRM_URL: ${OSRM_URL:-http://osrm:5000}
       INTERVALO_RUTAS: ${INTERVALO_RUTAS:-1m}
       RUTAS_HORAS_ATRAS: ${RUTAS_HORAS_ATRAS:-48}
+      # La MISMA velocidad maxima plausible que usa el correlator: el recorrido no
+      # puede contar una historia que la alerta ya descarto.
+      RUTAS_VEL_MAX_KMH: ${RULE_VELOCIDAD_MAXIMA_PLAUSIBLE:-70}
       API_TOKEN: ${JOBS_API_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: json

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -336,10 +337,19 @@ func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config
 		var calculadas, sinRuta, fallidas int64
 
 		for _, a := range pendientes {
+			// Puntos cuenta los que HAY, no los que se usan: la tarea compara este
+			// numero con el del rastro para saber si la ruta se quedo atras, y ese
+			// numero sale de la consulta, sin filtrar.
 			calculo := store.Calculo{
 				AlertID: a.AlertID,
 				Puntos:  len(a.Puntos),
 			}
+
+			// Se descartan los puntos a los que el vehiculo no pudo llegar: una
+			// placa mal leida o clonada deja una lectura a 8 km de la anterior, 25
+			// segundos despues, y forzar la ruta a pasar por ahi dibuja un recorrido
+			// de 12 km en un minuto.
+			a.Puntos = plausibles(a.Puntos, cfg.RutasVelMaxKmH)
 			if n := len(a.Puntos); n > 0 {
 				calculo.Desde, calculo.Hasta = a.Puntos[0].Momento, a.Puntos[n-1].Momento
 			}
@@ -423,6 +433,43 @@ func tareaRutas(almacen *store.Store, cliente *rutas.Cliente, cfg *config.Config
 			},
 		}, nil
 	}
+}
+
+// plausibles descarta los puntos a los que el vehiculo no pudo llegar desde el
+// ultimo punto ACEPTADO.
+//
+// Es el mismo criterio que aplica el correlator al encadenar infracciones, y se
+// mide contra el ultimo aceptado y no contra el anterior: si no, una sola lectura
+// falsa desplazaria la referencia y arrastraria consigo a las buenas que vinieran
+// despues. Se descuentan 300 m de margen, porque los sensores no tienen precision
+// de GPS.
+func plausibles(ps []store.Punto, maxKmH float64) []store.Punto {
+	if maxKmH <= 0 || len(ps) < 2 {
+		return ps
+	}
+
+	out := []store.Punto{ps[0]}
+	for _, p := range ps[1:] {
+		ult := out[len(out)-1]
+		km := distanciaKm(ult.Lat, ult.Lon, p.Lat, p.Lon) - 0.3
+		horas := p.Momento.Sub(ult.Momento).Hours()
+
+		if km <= 0 || (horas > 0 && km/horas <= maxKmH) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// distanciaKm es el semiverseno entre dos puntos.
+func distanciaKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const radioTierraKm = 6371.0
+	rad := func(g float64) float64 { return g * math.Pi / 180 }
+
+	dLat, dLon := rad(lat2-lat1), rad(lon2-lon1)
+	h := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(rad(lat1))*math.Cos(rad(lat2))*math.Sin(dLon/2)*math.Sin(dLon/2)
+	return 2 * radioTierraKm * math.Asin(math.Sqrt(h))
 }
 
 // puntosDistintos descarta los puntos repetidos consecutivos.

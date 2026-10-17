@@ -46,7 +46,7 @@ func main() {
 	var (
 		url        = flag.String("url", "http://localhost:8000", "URL base del ingestor")
 		apiKey     = flag.String("api-key", "", "valor de la cabecera X-API-Key")
-		escenario  = flag.String("escenario", "sostenido", "sostenido | rafaga | alertas | bulk | enunciado | tormenta | persecucion | verificar")
+		escenario  = flag.String("escenario", "sostenido", "sostenido | rafaga | alertas | bulk | enunciado | tormenta | persecucion | verificar | catalogo | ciudad | demo | evaluar")
 		rps        = flag.Int("rps", 10, "eventos por segundo en el escenario sostenido")
 		duracion   = flag.Duration("duracion", 30*time.Second, "duracion del escenario sostenido")
 		conc       = flag.Int("concurrencia", 50, "peticiones simultaneas maximas")
@@ -57,16 +57,23 @@ func main() {
 		// El correlator se publica en el host en 8001, no en 8080: dentro de
 		// Docker sigue en 8080, pero ese puerto choca a menudo con otro
 		// programa en las maquinas de desarrollo. Ver CORRELATOR_HOST_PORT.
-		correlador = flag.String("correlator", "http://localhost:8001", "URL base del correlator, para consultarlo y leer sus metricas")
-		motorRutas = flag.String("osrm", "http://localhost:5001", "URL base del motor de rutas, para tomar de el los tiempos de viaje reales")
-		urlGrafana = flag.String("grafana", "http://localhost:3000", "URL base de Grafana, para verificar lo que mostrara el tablero")
-		usrGrafana = flag.String("grafana-usuario", "admin", "usuario de Grafana")
-		pwdGrafana = flag.String("grafana-clave", "", "clave de Grafana")
-		tableros   = flag.String("tableros", "deploy/grafana/provisioning/dashboards", "carpeta con los tableros provisionados")
-		umbralKmH  = flag.Float64("umbral-kmh", 70, "referencia PROPIA de la verificacion, medida sobre el callejero: no se toma del sistema")
-		umbralSist = flag.Float64("umbral-sistema", 0, "tope que tiene configurado el correlator, para contrastarlo con la referencia")
-		ventanaMax = flag.Duration("ventana", 15*time.Minute, "ventana de correlacion mas larga configurada")
-		espera     = flag.Duration("espera", 3*time.Minute, "cuanto esperar a que cierre la ventana en el escenario enunciado")
+		correlador   = flag.String("correlator", "http://localhost:8001", "URL base del correlator, para consultarlo y leer sus metricas")
+		motorRutas   = flag.String("osrm", "http://localhost:5001", "URL base del motor de rutas, para tomar de el los tiempos de viaje reales")
+		urlGrafana   = flag.String("grafana", "http://localhost:3000", "URL base de Grafana, para verificar lo que mostrara el tablero")
+		usrGrafana   = flag.String("grafana-usuario", "admin", "usuario de Grafana")
+		pwdGrafana   = flag.String("grafana-clave", "", "clave de Grafana")
+		tableros     = flag.String("tableros", "deploy/grafana/provisioning/dashboards", "carpeta con los tableros provisionados")
+		umbralKmH    = flag.Float64("umbral-kmh", 70, "referencia PROPIA de la verificacion, medida sobre el callejero: no se toma del sistema")
+		umbralSist   = flag.Float64("umbral-sistema", 0, "tope que tiene configurado el correlator, para contrastarlo con la referencia")
+		ventanaMax   = flag.Duration("ventana", 15*time.Minute, "ventana de correlacion mas larga configurada")
+		catalogoRuta = flag.String("catalogo", "../../deploy/sensores/catalogo-guatemala.json", "archivo con la red fija de sensores")
+		semilla      = flag.Uint64("semilla", 2026, "semilla con la que se genera la red de sensores; la misma semilla da la misma red")
+		maxCamaras   = flag.Int("camaras", 140, "numero de camaras LPR de la red de sensores")
+		vivo         = flag.Duration("vivo", 0, "duracion de la simulacion de la ciudad; 0 es hasta Ctrl+C")
+		intensidad   = flag.Float64("intensidad", 1.0, "multiplicador de la frecuencia de incidentes en la simulacion de la ciudad")
+		horaSim      = flag.String("hora", "", "actuar como si fueran las HH:MM, solo para la curva de actividad (los eventos llevan la hora real)")
+		verdadRuta   = flag.String("verdad", "verdad-simulacion.json", "archivo donde la simulacion anota que incidentes genero; el sistema no lo ve")
+		espera       = flag.Duration("espera", 3*time.Minute, "cuanto esperar a que cierre la ventana en el escenario enunciado")
 	)
 	flag.Parse()
 
@@ -76,6 +83,43 @@ func main() {
 	// La verificacion no genera carga: comprueba que lo ya correlacionado sea
 	// coherente y que el tablero lo muestre. Sale antes de construir el
 	// generador porque no lo necesita.
+	if *horaSim != "" {
+		objetivo, err := time.Parse("15:04", *horaSim)
+		if err != nil {
+			log.Fatalf("-hora debe tener la forma HH:MM: %v", err)
+		}
+		ahora := time.Now().In(zonaGT)
+		deseado := time.Date(ahora.Year(), ahora.Month(), ahora.Day(),
+			objetivo.Hour(), objetivo.Minute(), 0, 0, zonaGT)
+		desfaseCurva = deseado.Sub(ahora)
+		fmt.Printf("Curva de actividad desplazada: se actua como si fueran las %s (son las %s)\n\n",
+			*horaSim, ahora.Format("15:04"))
+	}
+
+	if *escenario == "evaluar" {
+		g := nuevoGrafana(*urlGrafana, *usrGrafana, *pwdGrafana)
+		if err := evaluar(g, *verdadRuta); err != nil {
+			log.Fatalf("%v", err)
+		}
+		return
+	}
+
+	if *escenario == "catalogo" {
+		fmt.Println("Generacion del catalogo de sensores")
+		fmt.Println("")
+		cat, err := generarCatalogo(*semilla, *maxCamaras)
+		if err != nil {
+			log.Fatalf("no se pudo generar el catalogo: %v", err)
+		}
+		if err := guardarCatalogo(*catalogoRuta, cat); err != nil {
+			log.Fatalf("no se pudo guardar el catalogo: %v", err)
+		}
+		cat.resumen()
+		fmt.Println("  guardado en", *catalogoRuta)
+		fmt.Println("")
+		return
+	}
+
 	if *escenario == "verificar" {
 		fmt.Printf("Verificacion de coherencia de extremo a extremo\n")
 		g := nuevoGrafana(*urlGrafana, *usrGrafana, *pwdGrafana)
@@ -107,15 +151,19 @@ func main() {
 		res = gen.bulk(ctx, *lote)
 	case "enunciado":
 		fmt.Printf("Tabla 2.4 del enunciado: los dos renglones, uno positivo y uno negativo\n\n")
-		res = gen.enunciado(ctx, *correlador, *espera)
+		res = gen.enunciado(ctx, *correlador, *espera, *catalogoRuta)
 	case "tormenta":
 		fmt.Printf("Tormenta: %d incidentes simultaneos sobre las zonas de la ciudad\n\n", *cuantas)
 		res = gen.tormenta(ctx, *cuantas, urlCorrelator)
+	case "demo":
+		res = gen.demo(ctx, *catalogoRuta, *semilla, *verdadRuta)
+	case "ciudad":
+		res = gen.ciudad(ctx, *catalogoRuta, *semilla, *maxCamaras, *vivo, *intensidad, *verdadRuta)
 	case "persecucion":
 		fmt.Printf("Persecucion: un mismo vehiculo encadena infracciones tras un robo\n\n")
 		res = gen.persecucion(ctx, *trafico, *incidentes)
 	default:
-		log.Fatalf("escenario desconocido: %q (usa sostenido, rafaga, alertas, bulk, enunciado, tormenta, persecucion o verificar)", *escenario)
+		log.Fatalf("escenario desconocido: %q (usa sostenido, rafaga, alertas, bulk, enunciado, tormenta, persecucion, verificar, catalogo, ciudad, demo o evaluar)", *escenario)
 	}
 
 	res.imprimir()
@@ -245,8 +293,9 @@ func (g *generador) alertas(ctx context.Context) *resultados {
 // que hubo una senal suelta que nunca encontro companera. Sin ese registro,
 // una zona tranquila y una zona llena de senales incompletas son
 // indistinguibles, y la tasa de falsos positivos no se puede medir.
-func (g *generador) enunciado(ctx context.Context, correlator string, espera time.Duration) *resultados {
+func (g *generador) enunciado(ctx context.Context, correlator string, espera time.Duration, rutaCatalogo string) *resultados {
 	res := nuevosResultados()
+	panico, camara, panicoNeg, pausa := puntosEnunciado(rutaCatalogo)
 	fallos := 0
 
 	antes, err := g.leerMuestras(ctx, correlator)
@@ -269,9 +318,13 @@ func (g *generador) enunciado(ctx context.Context, correlator string, espera tim
 		zonaPositiva, placaEnunciado, velocidadEnunciado)
 	fmt.Println("             esperado: alerta possible_robbery")
 
-	for _, ev := range secuenciaEnunciadoPositiva() {
-		g.enviar(ctx, ev, res)
-		time.Sleep(200 * time.Millisecond)
+	// Cada evento se construye al enviarlo: lleva la hora a la que ocurre, y la
+	// lectura va a la hora a la que el coche llega a la camara.
+	for i, nuevo := range secuenciaEnunciadoPositiva(panico, camara) {
+		if i > 0 {
+			time.Sleep(pausa)
+		}
+		g.enviar(ctx, nuevo(), res)
 	}
 	time.Sleep(3 * time.Second)
 
@@ -309,7 +362,7 @@ func (g *generador) enunciado(ctx context.Context, correlator string, espera tim
 		return res
 	}
 
-	for _, ev := range secuenciaEnunciadoNegativa() {
+	for _, ev := range secuenciaEnunciadoNegativa(panicoNeg) {
 		g.enviar(ctx, ev, res)
 	}
 	time.Sleep(3 * time.Second)
@@ -392,31 +445,95 @@ const (
 	velocidadEnunciado = 85
 )
 
-func secuenciaEnunciadoPositiva() []map[string]any {
-	z := coordenadas(zonaPositiva)
-	return []map[string]any{
-		evento("panic.button", zonaPositiva, z.lat, z.lon, map[string]any{
-			"tipo_de_alerta":            "panico",
-			"identificador_dispositivo": "BTN-Z4-001",
-			"user_context":              "movil",
-		}),
-		evento("sensor.lpr", zonaPositiva, z.lat, z.lon, map[string]any{
-			"placa_vehicular":    placaEnunciado,
-			"velocidad_estimada": velocidadEnunciado,
-			"modelo_vehiculo":    "sedan",
-			"color_vehiculo":     "gris",
-		}),
+// puntosEnunciado elige los sensores de las dos zonas de la tabla.
+//
+// Salen del catalogo, que esta sobre calles reales: el par pulsador-camara de la
+// zona 4 con menos distancia POR CALLE, y un pulsador de la zona 10. Con los
+// centros de zona, que caen dentro de las manzanas, el recorrido por calle no
+// empalma con los puntos.
+//
+// La lectura llega cuando un coche, a velocidad urbana, ha recorrido esa
+// distancia. La velocidad de 85 km/h de la tabla es la de la lectura, un instante
+// del trayecto, y no el promedio: por la ciudad no se mantiene.
+//
+// Si no hay catalogo se cae a los centros de zona y la lectura sale casi a la vez
+// que el pulsador.
+func puntosEnunciado(rutaCatalogo string) (panico, camara, panicoNeg sensor, pausa time.Duration) {
+	zp, zn := coordenadas(zonaPositiva), coordenadas(zonaNegativa)
+	panico = sensor{ID: "BTN-Z4-001", Zona: zonaPositiva, Lat: zp.lat, Lon: zp.lon}
+	camara = panico
+	panicoNeg = sensor{ID: "BTN-Z10-001", Zona: zonaNegativa, Lat: zn.lat, Lon: zn.lon}
+	pausa = 200 * time.Millisecond
+
+	cat, err := cargarCatalogo(rutaCatalogo)
+	if err != nil {
+		return
+	}
+	var mejor *rutaCalle
+	for _, p := range cat.deTipo("panico") {
+		if p.Zona != zonaPositiva {
+			continue
+		}
+		for _, l := range cat.deTipo("lpr") {
+			if l.Zona != zonaPositiva {
+				continue
+			}
+			r, err := pedirRuta([2]float64{p.Lat, p.Lon}, [2]float64{l.Lat, l.Lon})
+			if err == nil && r.distanciaM >= 150 && (mejor == nil || r.distanciaM < mejor.distanciaM) {
+				mejor, panico, camara = r, p, l
+			}
+		}
+	}
+	for _, p := range cat.deTipo("panico") {
+		if p.Zona == zonaNegativa {
+			panicoNeg = p
+			break
+		}
+	}
+	if mejor != nil {
+		pausa = tiempoUrbano(mejor.distanciaM)
+		fmt.Printf("  Pulsador %s y camara %s: %.0f m por calle, %s a velocidad urbana\n\n",
+			panico.ID, camara.ID, mejor.distanciaM, pausa.Round(time.Second))
+	}
+	return
+}
+
+// tiempoUrbano es lo que tarda un coche en recorrer una distancia por la ciudad:
+// 30 km/h de promedio por calles de la ciudad, y 10 s hasta ponerse en marcha. La
+// ventana de la regla de robo es de 2 minutos, asi que la camara tiene que quedar
+// a menos de unos 800 m de calle.
+func tiempoUrbano(distanciaM float64) time.Duration {
+	const mps = 30 / 3.6
+	return 10*time.Second + time.Duration(distanciaM/mps*float64(time.Second))
+}
+
+func secuenciaEnunciadoPositiva(panico, camara sensor) []func() map[string]any {
+	return []func() map[string]any{
+		func() map[string]any {
+			return eventoEnPunto("panic.button", panico.Zona, [2]float64{panico.Lat, panico.Lon}, 0, map[string]any{
+				"tipo_de_alerta":            "panico",
+				"identificador_dispositivo": panico.ID,
+				"user_context":              "movil",
+			})
+		},
+		func() map[string]any {
+			return eventoEnPunto("sensor.lpr", camara.Zona, [2]float64{camara.Lat, camara.Lon}, 0, map[string]any{
+				"placa_vehicular":    placaEnunciado,
+				"velocidad_estimada": velocidadEnunciado,
+				"modelo_vehiculo":    "sedan",
+				"color_vehiculo":     "gris",
+			})
+		},
 	}
 }
 
 // secuenciaEnunciadoNegativa es un solo evento a proposito: es justamente la
 // ausencia de complementarios lo que el renglon 2 comprueba.
-func secuenciaEnunciadoNegativa() []map[string]any {
-	z := coordenadas(zonaNegativa)
+func secuenciaEnunciadoNegativa(panico sensor) []map[string]any {
 	return []map[string]any{
-		evento("panic.button", zonaNegativa, z.lat, z.lon, map[string]any{
+		eventoEnPunto("panic.button", panico.Zona, [2]float64{panico.Lat, panico.Lon}, 0, map[string]any{
 			"tipo_de_alerta":            "panico",
-			"identificador_dispositivo": "BTN-Z10-001",
+			"identificador_dispositivo": panico.ID,
 			"user_context":              "movil",
 		}),
 	}

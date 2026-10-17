@@ -1,0 +1,1395 @@
+{
+  "version": "1.0",
+  "nota": "RED SIMULADA. Las posiciones estan sobre calles reales y en los cruces mas transitados segun el callejero, pero NO es el inventario de camaras y sensores de la Municipalidad de Guatemala. Sustituir por el inventario real cuando exista.",
+  "generado": "2026-10-14T23:30:42Z",
+  "semilla": 2026,
+  "sensores": [
+    {
+      "id": "LPR-001",
+      "tipo": "lpr",
+      "zona": "zona_25",
+      "lat": 14.578526,
+      "lon": -90.499817,
+      "via": "25 Avenida",
+      "vel_ref_kmh": 41
+    },
+    {
+      "id": "LPR-002",
+      "tipo": "lpr",
+      "zona": "zona_11",
+      "lat": 14.602404,
+      "lon": -90.544135,
+      "via": "16 Calle",
+      "vel_ref_kmh": 28
+    },
+    {
+      "id": "LPR-003",
+      "tipo": "lpr",
+      "zona": "zona_8",
+      "lat": 14.617417,
+      "lon": -90.533854,
+      "via": "7a Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 45
+    },
+    {
+      "id": "LPR-004",
+      "tipo": "lpr",
+      "zona": "zona_7",
+      "lat": 14.619691,
+      "lon": -90.55517,
+      "via": "Avenida Tikal Futura",
+      "vel_ref_kmh": 50
+    },
+    {
+      "id": "LPR-005",
+      "tipo": "lpr",
+      "zona": "zona_6",
+      "lat": 14.651771,
+      "lon": -90.492092,
+      "via": "8a Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 45
+    },
+    {
+      "id": "LPR-006",
+      "tipo": "lpr",
+      "zona": "zona_19",
+      "lat": 14.662967,
+      "lon": -90.487136,
+      "via": "19 Calle A",
+      "vel_ref_kmh": 28
+    },
+    {
+      "id": "LPR-007",
+      "tipo": "lpr",
+      "zona": "zona_1",
+      "lat": 14.640888,
+      "lon": -90.512617,
+      "via": "7a Avenida",
+      "semaforo": true,
+      "vel_ref_kmh": 52
+    },
+    {
+      "id": "LPR-008",
+      "tipo": "lpr",
+      "zona": "zona_17",
+      "lat": 14.645041,
+      "lon": -90.461227,
+      "via": "13 Calle",
+      "vel_ref_kmh": 33
+    },
+    {
+      "id": "LPR-009",
+      "tipo": "lpr",
+      "zona": "zona_2",
+      "lat": 14.652771,
+      "lon": -90.516107,
+      "via": "6a Calle",
+      "vel_ref_kmh": 41
+    },
+    {
+      "id": "LPR-010",
+      "tipo": "lpr",
+      "zona": "zona_15",
+      "lat": 14.585714,
+      "lon": -90.487696,
+      "via": "23 Avenida",
+      "vel_ref_kmh": 41
+    },
+    {
+      "id": "LPR-011",
+      "tipo": "lpr",
+      "zona": "zona_12",
+      "lat": 14.588745,
+      "lon": -90.545118,
+      "via": "Avenida Petapa",
+      "semaforo": true,
+      "vel_ref_kmh": 41
+    },
+    {
+      "id": "LPR-012",
+      "tipo": "lpr",
+      "zona": "zona_15",
+      "lat": 14.607626,
+      "lon": -90.486847,
+      "via": "Boulevard Rafael Landívar",
+      "semaforo": true,
+      "vel_ref_kmh": 65
+    },
+    {
+      "id": "LPR-013",
+      "tipo": "lpr",
+      "zona": "zona_3",
+      "lat": 14.645414,
+      "lon": -90.536949,
+      "via": "Anillo Periférico",
+      "vel_ref_kmh": 60
+    },
+    {
+      "id": "LPR-014",
+      "tipo": "lpr",
+      "zona": "zona_19",
+      "lat": 14.653969,
+      "lon": -90.47803,
+      "via": "7a Calle",
+      "vel_ref_kmh": 68
+    },
+    {
+      "id": "LPR-015",
+      "tipo": "lpr",
+      "zona": "zona_24",
+      "lat": 14.563442,
+      "lon": -90.510782,
+      "vel_ref_kmh": 32
+    },
+    {
+      "id": "LPR-016",
+      "tipo": "lpr",
+      "zona": "zona_21",
+      "lat": 14.56918,
+      "lon": -90.53253,
+      "via": "26 Calle",
+      "vel_ref_kmh": 32
+    },
+    {
+      "id": "LPR-017",
+      "tipo": "lpr",
+      "zona": "zona_25",
+      "lat": 14.575728,
+      "lon": -90.493734,
+      "vel_ref_kmh": 31
+    },
+    {
+      "id": "LPR-018",
+      "tipo": "lpr",
+      "zona": "zona_15",
+      "lat": 14.578743,
+      "lon": -90.484134,
+      "via": "Boulevard Los Próceres",
+      "vel_ref_kmh": 57
+    },
+    {
+      "id": "LPR-019",
+      "tipo": "lpr",
+      "zona": "zona_16",
+      "lat": 14.594052,
+      "lon": -90.46295,
+      "vel_ref_kmh": 51
+    },
+    {
+      "id": "LPR-020",
+      "tipo": "lpr",
+      "zona": "zona_15",
+      "lat": 14.594845,
+      "lon": -90.480473,
+      "via": "Boulevard La Montaña",
+      "vel_ref_kmh": 49
+    },
+    {
+      "id": "LPR-021",
+      "tipo": "lpr",
+      "zona": "zona_10",
+      "lat": 14.595026,
+      "lon": -90.517957,
+      "via": "Plaza Obelisco",
+      "vel_ref_kmh": 79
+    },
+    {
+      "id": "LPR-022",
+      "tipo": "lpr",
+      "zona": "zona_10",
+      "lat": 14.599538,
+      "lon": -90.512686,
+      "via": "4a Avenida",
+      "vel_ref_kmh": 30
+    },
+    {
+      "id": "LPR-023",
+      "tipo": "lpr",
+      "zona": "zona_9",
+      "lat": 14.605351,
+      "lon": -90.520837,
+      "via": "5a Avenida",
+      "semaforo": true,
+      "vel_ref_kmh": 31
+    },
+    {
+      "id": "LPR-024",
+      "tipo": "lpr",
+      "zona": "zona_16",
+      "lat": 14.611406,
+      "lon": -90.460298,
+      "via": "34 Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 33
+    },
+    {
+      "id": "LPR-025",
+      "tipo": "lpr",
+      "zona": "zona_4",
+      "lat": 14.628237,
+      "lon": -90.522405,
+      "via": "22 Calle",
+      "vel_ref_kmh": 38
+    },
+    {
+      "id": "LPR-026",
+      "tipo": "lpr",
+      "zona": "zona_5",
+      "lat": 14.631553,
+      "lon": -90.504841,
+      "via": "15 Avenida",
+      "vel_ref_kmh": 36
+    },
+    {
+      "id": "LPR-027",
+      "tipo": "lpr",
+      "zona": "zona_17",
+      "lat": 14.647856,
+      "lon": -90.474758,
+      "via": "Ruta al Atlántico",
+      "semaforo": true,
+      "vel_ref_kmh": 60
+    },
+    {
+      "id": "LPR-028",
+      "tipo": "lpr",
+      "zona": "zona_3",
+      "lat": 14.648896,
+      "lon": -90.530747,
+      "via": "Anillo Periférico",
+      "vel_ref_kmh": 36
+    },
+    {
+      "id": "LPR-029",
+      "tipo": "lpr",
+      "zona": "zona_18",
+      "lat": 14.66451,
+      "lon": -90.470385,
+      "via": "19 Calle",
+      "vel_ref_kmh": 69
+    },
+    {
+      "id": "LPR-030",
+      "tipo": "lpr",
+      "zona": "zona_24",
+      "lat": 14.551794,
+      "lon": -90.496081,
+      "via": "0 Avenida",
+      "vel_ref_kmh": 60
+    },
+    {
+      "id": "LPR-031",
+      "tipo": "lpr",
+      "zona": "zona_25",
+      "lat": 14.557289,
+      "lon": -90.49114,
+      "via": "Calle Real",
+      "vel_ref_kmh": 63
+    },
+    {
+      "id": "LPR-032",
+      "tipo": "lpr",
+      "zona": "zona_24",
+      "lat": 14.563977,
+      "lon": -90.502267,
+      "via": "0 Avenida",
+      "vel_ref_kmh": 61
+    },
+    {
+      "id": "LPR-033",
+      "tipo": "lpr",
+      "zona": "zona_25",
+      "lat": 14.564851,
+      "lon": -90.489391,
+      "via": "1a Avenida",
+      "semaforo": true,
+      "vel_ref_kmh": 59
+    },
+    {
+      "id": "LPR-034",
+      "tipo": "lpr",
+      "zona": "zona_21",
+      "lat": 14.56597,
+      "lon": -90.528551,
+      "via": "Avenida Hincapié",
+      "semaforo": true,
+      "vel_ref_kmh": 45
+    },
+    {
+      "id": "LPR-035",
+      "tipo": "lpr",
+      "zona": "zona_21",
+      "lat": 14.571777,
+      "lon": -90.527864,
+      "via": "24 Calle A",
+      "semaforo": true,
+      "vel_ref_kmh": 34
+    },
+    {
+      "id": "LPR-036",
+      "tipo": "lpr",
+      "zona": "zona_14",
+      "lat": 14.580481,
+      "lon": -90.505778,
+      "via": "9a Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 49
+    },
+    {
+      "id": "LPR-037",
+      "tipo": "lpr",
+      "zona": "zona_13",
+      "lat": 14.586883,
+      "lon": -90.532145,
+      "via": "15 Calle",
+      "vel_ref_kmh": 60
+    },
+    {
+      "id": "LPR-038",
+      "tipo": "lpr",
+      "zona": "zona_14",
+      "lat": 14.588698,
+      "lon": -90.502687,
+      "via": "18 Avenida",
+      "vel_ref_kmh": 59
+    },
+    {
+      "id": "LPR-039",
+      "tipo": "lpr",
+      "zona": "zona_16",
+      "lat": 14.599507,
+      "lon": -90.462868,
+      "via": "Calle Principal Hacienda Real",
+      "vel_ref_kmh": 39
+    },
+    {
+      "id": "LPR-040",
+      "tipo": "lpr",
+      "zona": "zona_9",
+      "lat": 14.603008,
+      "lon": -90.528112,
+      "via": "7a Avenida",
+      "vel_ref_kmh": 64
+    },
+    {
+      "id": "LPR-041",
+      "tipo": "lpr",
+      "zona": "zona_11",
+      "lat": 14.604948,
+      "lon": -90.535888,
+      "via": "8a Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 47
+    },
+    {
+      "id": "LPR-042",
+      "tipo": "lpr",
+      "zona": "zona_8",
+      "lat": 14.610578,
+      "lon": -90.533124,
+      "via": "14 Avenida",
+      "vel_ref_kmh": 66
+    },
+    {
+      "id": "LPR-043",
+      "tipo": "lpr",
+      "zona": "zona_16",
+      "lat": 14.614166,
+      "lon": -90.483705,
+      "via": "Boulevard Austríaco",
+      "vel_ref_kmh": 41
+    },
+    {
+      "id": "LPR-044",
+      "tipo": "lpr",
+      "zona": "zona_8",
+      "lat": 14.616487,
+      "lon": -90.539584,
+      "via": "Calzada Roosevelt",
+      "vel_ref_kmh": 70
+    },
+    {
+      "id": "LPR-045",
+      "tipo": "lpr",
+      "zona": "zona_8",
+      "lat": 14.618377,
+      "lon": -90.528592,
+      "via": "33 Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 56
+    },
+    {
+      "id": "LPR-046",
+      "tipo": "lpr",
+      "zona": "zona_4",
+      "lat": 14.630445,
+      "lon": -90.517286,
+      "via": "Avenida Bolívar",
+      "vel_ref_kmh": 80
+    },
+    {
+      "id": "LPR-047",
+      "tipo": "lpr",
+      "zona": "zona_5",
+      "lat": 14.632365,
+      "lon": -90.510737,
+      "via": "15 Calle A",
+      "semaforo": true,
+      "vel_ref_kmh": 44
+    },
+    {
+      "id": "LPR-048",
+      "tipo": "lpr",
+      "zona": "zona_3",
+      "lat": 14.646153,
+      "lon": -90.525798,
+      "via": "Anillo Periférico",
+      "semaforo": true,
+      "vel_ref_kmh": 79
+    },
+    {
+      "id": "LPR-049",
+      "tipo": "lpr",
+      "zona": "zona_6",
+      "lat": 14.65042,
+      "lon": -90.49802,
+      "via": "16 Avenida A",
+      "vel_ref_kmh": 48
+    },
+    {
+      "id": "LPR-050",
+      "tipo": "lpr",
+      "zona": "zona_19",
+      "lat": 14.651791,
+      "lon": -90.483004,
+      "via": "7a Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 68
+    },
+    {
+      "id": "LPR-051",
+      "tipo": "lpr",
+      "zona": "zona_2",
+      "lat": 14.651873,
+      "lon": -90.511053,
+      "via": "Calle Martí",
+      "semaforo": true,
+      "vel_ref_kmh": 46
+    },
+    {
+      "id": "LPR-052",
+      "tipo": "lpr",
+      "zona": "zona_19",
+      "lat": 14.660165,
+      "lon": -90.473296,
+      "via": "20 Avenida",
+      "semaforo": true,
+      "vel_ref_kmh": 69
+    },
+    {
+      "id": "LPR-053",
+      "tipo": "lpr",
+      "zona": "zona_18",
+      "lat": 14.672754,
+      "lon": -90.472769,
+      "vel_ref_kmh": 28
+    },
+    {
+      "id": "LPR-054",
+      "tipo": "lpr",
+      "zona": "zona_24",
+      "lat": 14.54954,
+      "lon": -90.521769,
+      "via": "4a Avenida",
+      "vel_ref_kmh": 53
+    },
+    {
+      "id": "LPR-055",
+      "tipo": "lpr",
+      "zona": "zona_24",
+      "lat": 14.552865,
+      "lon": -90.525723,
+      "via": "1a Avenida",
+      "vel_ref_kmh": 42
+    },
+    {
+      "id": "LPR-056",
+      "tipo": "lpr",
+      "zona": "zona_24",
+      "lat": 14.562521,
+      "lon": -90.517271,
+      "vel_ref_kmh": 66
+    },
+    {
+      "id": "LPR-057",
+      "tipo": "lpr",
+      "zona": "zona_25",
+      "lat": 14.570522,
+      "lon": -90.496534,
+      "via": "5a Avenida",
+      "vel_ref_kmh": 50
+    },
+    {
+      "id": "LPR-058",
+      "tipo": "lpr",
+      "zona": "zona_25",
+      "lat": 14.572762,
+      "lon": -90.488803,
+      "via": "Carretera a Santa Catarina Pinula",
+      "vel_ref_kmh": 68
+    },
+    {
+      "id": "LPR-059",
+      "tipo": "lpr",
+      "zona": "zona_21",
+      "lat": 14.575669,
+      "lon": -90.531965,
+      "via": "10a Avenida",
+      "semaforo": true,
+      "vel_ref_kmh": 46
+    },
+    {
+      "id": "LPR-060",
+      "tipo": "lpr",
+      "zona": "zona_12",
+      "lat": 14.582106,
+      "lon": -90.546046,
+      "via": "Avenida Petapa",
+      "vel_ref_kmh": 59
+    },
+    {
+      "id": "LPR-061",
+      "tipo": "lpr",
+      "zona": "zona_25",
+      "lat": 14.584124,
+      "lon": -90.499505,
+      "via": "22 Avenida",
+      "vel_ref_kmh": 50
+    },
+    {
+      "id": "LPR-062",
+      "tipo": "lpr",
+      "zona": "zona_13",
+      "lat": 14.586144,
+      "lon": -90.520896,
+      "via": "11 Calle",
+      "vel_ref_kmh": 39
+    },
+    {
+      "id": "LPR-063",
+      "tipo": "lpr",
+      "zona": "zona_15",
+      "lat": 14.592887,
+      "lon": -90.493229,
+      "via": "2a Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 40
+    },
+    {
+      "id": "LPR-064",
+      "tipo": "lpr",
+      "zona": "zona_12",
+      "lat": 14.593175,
+      "lon": -90.550229,
+      "via": "11 Avenida",
+      "vel_ref_kmh": 65
+    },
+    {
+      "id": "LPR-065",
+      "tipo": "lpr",
+      "zona": "zona_12",
+      "lat": 14.594253,
+      "lon": -90.544741,
+      "via": "Avenida Petapa",
+      "semaforo": true,
+      "vel_ref_kmh": 68
+    },
+    {
+      "id": "LPR-066",
+      "tipo": "lpr",
+      "zona": "zona_11",
+      "lat": 14.597908,
+      "lon": -90.55664,
+      "via": "Anillo Periférico",
+      "vel_ref_kmh": 71
+    },
+    {
+      "id": "LPR-067",
+      "tipo": "lpr",
+      "zona": "zona_9",
+      "lat": 14.598442,
+      "lon": -90.530178,
+      "via": "7a Avenida",
+      "vel_ref_kmh": 60
+    },
+    {
+      "id": "LPR-068",
+      "tipo": "lpr",
+      "zona": "zona_15",
+      "lat": 14.59856,
+      "lon": -90.497893,
+      "via": "Boulevard Rafael Landívar",
+      "semaforo": true,
+      "vel_ref_kmh": 63
+    },
+    {
+      "id": "LPR-069",
+      "tipo": "lpr",
+      "zona": "zona_9",
+      "lat": 14.598852,
+      "lon": -90.522489,
+      "via": "14 Calle",
+      "vel_ref_kmh": 58
+    },
+    {
+      "id": "LPR-070",
+      "tipo": "lpr",
+      "zona": "zona_10",
+      "lat": 14.611735,
+      "lon": -90.507228,
+      "via": "Boulevard Vista Hermosa",
+      "vel_ref_kmh": 70
+    },
+    {
+      "id": "LPR-071",
+      "tipo": "lpr",
+      "zona": "zona_7",
+      "lat": 14.611791,
+      "lon": -90.553539,
+      "via": "13 Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 46
+    },
+    {
+      "id": "LPR-072",
+      "tipo": "lpr",
+      "zona": "zona_9",
+      "lat": 14.613267,
+      "lon": -90.518376,
+      "via": "6a Avenida",
+      "vel_ref_kmh": 43
+    },
+    {
+      "id": "LPR-073",
+      "tipo": "lpr",
+      "zona": "zona_8",
+      "lat": 14.614592,
+      "lon": -90.525053,
+      "via": "2a Calle",
+      "vel_ref_kmh": 48
+    },
+    {
+      "id": "LPR-074",
+      "tipo": "lpr",
+      "zona": "zona_7",
+      "lat": 14.617183,
+      "lon": -90.550127,
+      "via": "16 Avenida",
+      "vel_ref_kmh": 62
+    },
+    {
+      "id": "LPR-075",
+      "tipo": "lpr",
+      "zona": "zona_16",
+      "lat": 14.620038,
+      "lon": -90.484261,
+      "via": "Boulevard Austríaco",
+      "vel_ref_kmh": 60
+    },
+    {
+      "id": "LPR-076",
+      "tipo": "lpr",
+      "zona": "zona_5",
+      "lat": 14.627882,
+      "lon": -90.484272,
+      "vel_ref_kmh": 60
+    },
+    {
+      "id": "LPR-077",
+      "tipo": "lpr",
+      "zona": "zona_5",
+      "lat": 14.637793,
+      "lon": -90.488948,
+      "via": "Calzada La Paz",
+      "vel_ref_kmh": 66
+    },
+    {
+      "id": "LPR-078",
+      "tipo": "lpr",
+      "zona": "zona_1",
+      "lat": 14.641106,
+      "lon": -90.518404,
+      "via": "9a Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 55
+    },
+    {
+      "id": "LPR-079",
+      "tipo": "lpr",
+      "zona": "zona_6",
+      "lat": 14.64468,
+      "lon": -90.485697,
+      "via": "2a Avenida",
+      "vel_ref_kmh": 41
+    },
+    {
+      "id": "LPR-080",
+      "tipo": "lpr",
+      "zona": "zona_17",
+      "lat": 14.644742,
+      "lon": -90.479369,
+      "via": "2a Avenida",
+      "semaforo": true,
+      "vel_ref_kmh": 42
+    },
+    {
+      "id": "LPR-081",
+      "tipo": "lpr",
+      "zona": "zona_6",
+      "lat": 14.656621,
+      "lon": -90.494935,
+      "via": "12 Calle",
+      "semaforo": true,
+      "vel_ref_kmh": 31
+    },
+    {
+      "id": "LPR-082",
+      "tipo": "lpr",
+      "zona": "zona_18",
+      "lat": 14.668396,
+      "lon": -90.467029,
+      "via": "20 Avenida",
+      "vel_ref_kmh": 69
+    },
+    {
+      "id": "RAD-01",
+      "tipo": "velocidad",
+      "zona": "zona_8",
+      "lat": 14.617549,
+      "lon": -90.532848,
+      "via": "7a Calle",
+      "vel_ref_kmh": 64
+    },
+    {
+      "id": "RAD-02",
+      "tipo": "velocidad",
+      "zona": "zona_1",
+      "lat": 14.642806,
+      "lon": -90.5156,
+      "via": "4a Avenida",
+      "vel_ref_kmh": 71
+    },
+    {
+      "id": "RAD-03",
+      "tipo": "velocidad",
+      "zona": "zona_19",
+      "lat": 14.654374,
+      "lon": -90.475058,
+      "via": "7a Calle",
+      "vel_ref_kmh": 68
+    },
+    {
+      "id": "RAD-04",
+      "tipo": "velocidad",
+      "zona": "zona_10",
+      "lat": 14.594835,
+      "lon": -90.521318,
+      "via": "Avenida Hincapié",
+      "vel_ref_kmh": 67
+    },
+    {
+      "id": "RAD-05",
+      "tipo": "velocidad",
+      "zona": "zona_15",
+      "lat": 14.581263,
+      "lon": -90.48476,
+      "vel_ref_kmh": 64
+    },
+    {
+      "id": "RAD-06",
+      "tipo": "velocidad",
+      "zona": "zona_25",
+      "lat": 14.584172,
+      "lon": -90.498011,
+      "via": "Boulevard Los Próceres",
+      "vel_ref_kmh": 70
+    },
+    {
+      "id": "RAD-07",
+      "tipo": "velocidad",
+      "zona": "zona_15",
+      "lat": 14.595366,
+      "lon": -90.49488,
+      "via": "18 Avenida",
+      "vel_ref_kmh": 79
+    },
+    {
+      "id": "RAD-08",
+      "tipo": "velocidad",
+      "zona": "zona_11",
+      "lat": 14.600791,
+      "lon": -90.539573,
+      "via": "Calzada Atanasio Tzul",
+      "vel_ref_kmh": 67
+    },
+    {
+      "id": "RAD-09",
+      "tipo": "velocidad",
+      "zona": "zona_7",
+      "lat": 14.615189,
+      "lon": -90.554467,
+      "via": "Anillo Periférico",
+      "vel_ref_kmh": 70
+    },
+    {
+      "id": "RAD-10",
+      "tipo": "velocidad",
+      "zona": "zona_5",
+      "lat": 14.629104,
+      "lon": -90.48625,
+      "via": "Calzada La Paz",
+      "vel_ref_kmh": 81
+    },
+    {
+      "id": "ACU-01",
+      "tipo": "acustico",
+      "zona": "zona_25",
+      "lat": 14.580339,
+      "lon": -90.49843,
+      "via": "26 Avenida"
+    },
+    {
+      "id": "ACU-02",
+      "tipo": "acustico",
+      "zona": "zona_3",
+      "lat": 14.647039,
+      "lon": -90.536381,
+      "via": "33 Avenida"
+    },
+    {
+      "id": "ACU-03",
+      "tipo": "acustico",
+      "zona": "zona_16",
+      "lat": 14.594075,
+      "lon": -90.465768,
+      "via": "Viaducto El Pulté"
+    },
+    {
+      "id": "ACU-04",
+      "tipo": "acustico",
+      "zona": "zona_10",
+      "lat": 14.600458,
+      "lon": -90.512513,
+      "via": "12 Calle"
+    },
+    {
+      "id": "ACU-05",
+      "tipo": "acustico",
+      "zona": "zona_11",
+      "lat": 14.602942,
+      "lon": -90.539184,
+      "via": "12 Calle"
+    },
+    {
+      "id": "ACU-06",
+      "tipo": "acustico",
+      "zona": "zona_7",
+      "lat": 14.620117,
+      "lon": -90.555832
+    },
+    {
+      "id": "ACU-07",
+      "tipo": "acustico",
+      "zona": "zona_4",
+      "lat": 14.628833,
+      "lon": -90.518881,
+      "via": "21 Calle"
+    },
+    {
+      "id": "ACU-08",
+      "tipo": "acustico",
+      "zona": "zona_17",
+      "lat": 14.644073,
+      "lon": -90.461701,
+      "via": "13 Avenida"
+    },
+    {
+      "id": "ACU-09",
+      "tipo": "acustico",
+      "zona": "zona_6",
+      "lat": 14.65003,
+      "lon": -90.490932,
+      "via": "4a Calle"
+    },
+    {
+      "id": "ACU-10",
+      "tipo": "acustico",
+      "zona": "zona_2",
+      "lat": 14.650323,
+      "lon": -90.517065,
+      "via": "2a Calle"
+    },
+    {
+      "id": "ACU-11",
+      "tipo": "acustico",
+      "zona": "zona_19",
+      "lat": 14.66344,
+      "lon": -90.485433,
+      "via": "19 Calle E"
+    },
+    {
+      "id": "ACU-12",
+      "tipo": "acustico",
+      "zona": "zona_18",
+      "lat": 14.664829,
+      "lon": -90.470508,
+      "via": "19 Calle"
+    },
+    {
+      "id": "ACU-13",
+      "tipo": "acustico",
+      "zona": "zona_15",
+      "lat": 14.581299,
+      "lon": -90.484583,
+      "via": "Boulevard Vista Hermosa"
+    },
+    {
+      "id": "ACU-14",
+      "tipo": "acustico",
+      "zona": "zona_8",
+      "lat": 14.617898,
+      "lon": -90.542043,
+      "via": "Calzada San Juan"
+    },
+    {
+      "id": "ACU-15",
+      "tipo": "acustico",
+      "zona": "zona_1",
+      "lat": 14.64232,
+      "lon": -90.512464,
+      "via": "6a Calle"
+    },
+    {
+      "id": "ACU-16",
+      "tipo": "acustico",
+      "zona": "zona_17",
+      "lat": 14.649839,
+      "lon": -90.472225,
+      "via": "11 Calle"
+    },
+    {
+      "id": "ACU-17",
+      "tipo": "acustico",
+      "zona": "zona_6",
+      "lat": 14.650975,
+      "lon": -90.502742,
+      "via": "Calzada José Milla y Vidaurre"
+    },
+    {
+      "id": "ACU-18",
+      "tipo": "acustico",
+      "zona": "zona_24",
+      "lat": 14.550198,
+      "lon": -90.526231,
+      "via": "3a Calle"
+    },
+    {
+      "id": "ACU-19",
+      "tipo": "acustico",
+      "zona": "zona_24",
+      "lat": 14.562151,
+      "lon": -90.514917
+    },
+    {
+      "id": "ACU-20",
+      "tipo": "acustico",
+      "zona": "zona_24",
+      "lat": 14.562447,
+      "lon": -90.500496,
+      "via": "0 Avenida"
+    },
+    {
+      "id": "ACU-21",
+      "tipo": "acustico",
+      "zona": "zona_21",
+      "lat": 14.566382,
+      "lon": -90.529941,
+      "via": "28 Calle"
+    },
+    {
+      "id": "ACU-22",
+      "tipo": "acustico",
+      "zona": "zona_25",
+      "lat": 14.568289,
+      "lon": -90.492863,
+      "via": "0 Calle"
+    },
+    {
+      "id": "ACU-23",
+      "tipo": "acustico",
+      "zona": "zona_13",
+      "lat": 14.584045,
+      "lon": -90.529697,
+      "via": "11 Avenida"
+    },
+    {
+      "id": "ACU-24",
+      "tipo": "acustico",
+      "zona": "zona_12",
+      "lat": 14.586834,
+      "lon": -90.542354,
+      "via": "33 Calle"
+    },
+    {
+      "id": "ACU-25",
+      "tipo": "acustico",
+      "zona": "zona_14",
+      "lat": 14.587203,
+      "lon": -90.503219,
+      "via": "20 Calle"
+    },
+    {
+      "id": "ACU-26",
+      "tipo": "acustico",
+      "zona": "zona_15",
+      "lat": 14.588753,
+      "lon": -90.489972,
+      "via": "Boulevard Vista Hermosa"
+    },
+    {
+      "id": "ACU-27",
+      "tipo": "acustico",
+      "zona": "zona_10",
+      "lat": 14.59359,
+      "lon": -90.518185,
+      "via": "Avenida Las Américas"
+    },
+    {
+      "id": "ACU-28",
+      "tipo": "acustico",
+      "zona": "zona_15",
+      "lat": 14.594873,
+      "lon": -90.479954,
+      "via": "Boulevard La Montaña"
+    },
+    {
+      "id": "BTN-1-1",
+      "tipo": "panico",
+      "zona": "zona_1",
+      "lat": 14.639922,
+      "lon": -90.512751,
+      "via": "7a Avenida"
+    },
+    {
+      "id": "BTN-1-2",
+      "tipo": "panico",
+      "zona": "zona_1",
+      "lat": 14.64458,
+      "lon": -90.517112,
+      "via": "4a Calle A"
+    },
+    {
+      "id": "BTN-2-1",
+      "tipo": "panico",
+      "zona": "zona_2",
+      "lat": 14.656295,
+      "lon": -90.516749
+    },
+    {
+      "id": "BTN-2-2",
+      "tipo": "panico",
+      "zona": "zona_2",
+      "lat": 14.654072,
+      "lon": -90.513908,
+      "via": "Boulevard Castillo Lara"
+    },
+    {
+      "id": "BTN-3-1",
+      "tipo": "panico",
+      "zona": "zona_3",
+      "lat": 14.648598,
+      "lon": -90.527423
+    },
+    {
+      "id": "BTN-3-2",
+      "tipo": "panico",
+      "zona": "zona_3",
+      "lat": 14.651777,
+      "lon": -90.52996,
+      "via": "11 Avenida"
+    },
+    {
+      "id": "BTN-4-1",
+      "tipo": "panico",
+      "zona": "zona_4",
+      "lat": 14.631184,
+      "lon": -90.521487,
+      "via": "Avenida Centro América B"
+    },
+    {
+      "id": "BTN-5-1",
+      "tipo": "panico",
+      "zona": "zona_5",
+      "lat": 14.630388,
+      "lon": -90.504988,
+      "via": "15 Avenida"
+    },
+    {
+      "id": "BTN-5-2",
+      "tipo": "panico",
+      "zona": "zona_5",
+      "lat": 14.631881,
+      "lon": -90.501435,
+      "via": "15 Calle A"
+    },
+    {
+      "id": "BTN-6-1",
+      "tipo": "panico",
+      "zona": "zona_6",
+      "lat": 14.652493,
+      "lon": -90.495598,
+      "via": "7a Calle A"
+    },
+    {
+      "id": "BTN-6-2",
+      "tipo": "panico",
+      "zona": "zona_6",
+      "lat": 14.654735,
+      "lon": -90.497154,
+      "via": "9a Calle"
+    },
+    {
+      "id": "BTN-7-1",
+      "tipo": "panico",
+      "zona": "zona_7",
+      "lat": 14.623024,
+      "lon": -90.553108
+    },
+    {
+      "id": "BTN-7-2",
+      "tipo": "panico",
+      "zona": "zona_7",
+      "lat": 14.622657,
+      "lon": -90.556116,
+      "via": "24 Avenida"
+    },
+    {
+      "id": "BTN-8-1",
+      "tipo": "panico",
+      "zona": "zona_8",
+      "lat": 14.620406,
+      "lon": -90.529924,
+      "via": "6a Avenida"
+    },
+    {
+      "id": "BTN-8-2",
+      "tipo": "panico",
+      "zona": "zona_8",
+      "lat": 14.620136,
+      "lon": -90.535009,
+      "via": "2a Avenida"
+    },
+    {
+      "id": "BTN-9-1",
+      "tipo": "panico",
+      "zona": "zona_9",
+      "lat": 14.602561,
+      "lon": -90.521672,
+      "via": "5a Avenida"
+    },
+    {
+      "id": "BTN-9-2",
+      "tipo": "panico",
+      "zona": "zona_9",
+      "lat": 14.605272,
+      "lon": -90.521273,
+      "via": "5a Avenida"
+    },
+    {
+      "id": "BTN-10-1",
+      "tipo": "panico",
+      "zona": "zona_10",
+      "lat": 14.596001,
+      "lon": -90.512424,
+      "via": "5a Avenida"
+    },
+    {
+      "id": "BTN-10-2",
+      "tipo": "panico",
+      "zona": "zona_10",
+      "lat": 14.598552,
+      "lon": -90.514781,
+      "via": "2a Avenida"
+    },
+    {
+      "id": "BTN-11-1",
+      "tipo": "panico",
+      "zona": "zona_11",
+      "lat": 14.601601,
+      "lon": -90.543224,
+      "via": "16 Calle"
+    },
+    {
+      "id": "BTN-12-1",
+      "tipo": "panico",
+      "zona": "zona_12",
+      "lat": 14.588926,
+      "lon": -90.54694
+    },
+    {
+      "id": "BTN-12-2",
+      "tipo": "panico",
+      "zona": "zona_12",
+      "lat": 14.590834,
+      "lon": -90.548538
+    },
+    {
+      "id": "BTN-13-1",
+      "tipo": "panico",
+      "zona": "zona_13",
+      "lat": 14.583785,
+      "lon": -90.524541,
+      "via": "Avenida Hincapié"
+    },
+    {
+      "id": "BTN-14-1",
+      "tipo": "panico",
+      "zona": "zona_14",
+      "lat": 14.58432,
+      "lon": -90.508164,
+      "via": "14 Avenida"
+    },
+    {
+      "id": "BTN-14-2",
+      "tipo": "panico",
+      "zona": "zona_14",
+      "lat": 14.580825,
+      "lon": -90.512457,
+      "via": "10a Calle"
+    },
+    {
+      "id": "BTN-15-1",
+      "tipo": "panico",
+      "zona": "zona_15",
+      "lat": 14.592701,
+      "lon": -90.488821,
+      "via": "20 Avenida A"
+    },
+    {
+      "id": "BTN-15-2",
+      "tipo": "panico",
+      "zona": "zona_15",
+      "lat": 14.586525,
+      "lon": -90.486291
+    },
+    {
+      "id": "BTN-16-1",
+      "tipo": "panico",
+      "zona": "zona_16",
+      "lat": 14.611082,
+      "lon": -90.462388,
+      "via": "22 Avenida A"
+    },
+    {
+      "id": "BTN-16-2",
+      "tipo": "panico",
+      "zona": "zona_16",
+      "lat": 14.611407,
+      "lon": -90.459637,
+      "via": "24 Avenida A"
+    },
+    {
+      "id": "BTN-17-1",
+      "tipo": "panico",
+      "zona": "zona_17",
+      "lat": 14.642473,
+      "lon": -90.457741,
+      "via": "11 Calle A"
+    },
+    {
+      "id": "BTN-17-2",
+      "tipo": "panico",
+      "zona": "zona_17",
+      "lat": 14.646431,
+      "lon": -90.461979,
+      "via": "12 Avenida A"
+    },
+    {
+      "id": "BTN-18-1",
+      "tipo": "panico",
+      "zona": "zona_18",
+      "lat": 14.671515,
+      "lon": -90.467692,
+      "via": "Diagonal 39"
+    },
+    {
+      "id": "BTN-18-2",
+      "tipo": "panico",
+      "zona": "zona_18",
+      "lat": 14.669323,
+      "lon": -90.472344
+    },
+    {
+      "id": "BTN-19-1",
+      "tipo": "panico",
+      "zona": "zona_19",
+      "lat": 14.663045,
+      "lon": -90.4861,
+      "via": "22 Avenida"
+    },
+    {
+      "id": "BTN-19-2",
+      "tipo": "panico",
+      "zona": "zona_19",
+      "lat": 14.663773,
+      "lon": -90.483235
+    },
+    {
+      "id": "BTN-21-1",
+      "tipo": "panico",
+      "zona": "zona_21",
+      "lat": 14.571228,
+      "lon": -90.53436
+    },
+    {
+      "id": "BTN-21-2",
+      "tipo": "panico",
+      "zona": "zona_21",
+      "lat": 14.566549,
+      "lon": -90.53504,
+      "via": "28 Calle B"
+    },
+    {
+      "id": "BTN-24-1",
+      "tipo": "panico",
+      "zona": "zona_24",
+      "lat": 14.558476,
+      "lon": -90.510938,
+      "via": "1a Calle"
+    },
+    {
+      "id": "BTN-24-2",
+      "tipo": "panico",
+      "zona": "zona_24",
+      "lat": 14.564551,
+      "lon": -90.508743
+    },
+    {
+      "id": "BTN-25-1",
+      "tipo": "panico",
+      "zona": "zona_25",
+      "lat": 14.573653,
+      "lon": -90.49985,
+      "via": "8a Avenida G"
+    },
+    {
+      "id": "BTN-25-2",
+      "tipo": "panico",
+      "zona": "zona_25",
+      "lat": 14.576496,
+      "lon": -90.495981
+    }
+  ]
+}

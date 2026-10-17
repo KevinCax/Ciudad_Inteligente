@@ -715,7 +715,7 @@ def opciones_mapa(capas):
 # positivo del enunciado, y un mapa vacio parece un fallo del tablero cuando es
 # justo lo que hay que ensenar: un incidente de un solo punto.
 RASTRO = (
-                     "WITH cadena AS (\n"
+                     "WITH RECURSIVE cadena AS (\n"
                      "  SELECT '$incidente'::uuid AS eid\n"
                      "  UNION\n"
                      "  SELECT ev.id::uuid\n"
@@ -757,13 +757,46 @@ RASTRO = (
                      "  FROM rastro r\n"
                      "  WHERE r.tramo = 0\n"
                      "    AND NOT EXISTS (SELECT 1 FROM cadena c WHERE c.eid = r.event_id)\n"
+                     "),\n"
+                     "puntos AS (\n"
+                     "  SELECT e.event_id, e.ts_utc, e.geo_lat::float8 AS lat, e.geo_lon::float8 AS lon,\n"
+                     "         row_number() OVER (ORDER BY e.ts_utc) AS n\n"
+                     "  FROM incidente i JOIN events e ON e.event_id = i.event_id\n"
+                     "  WHERE e.geo_lat IS NOT NULL\n"
+                     "),\n"
+                     "plausibles AS (\n"
+                     "  SELECT n, event_id, ts_utc AS rts, lat AS rlat, lon AS rlon, true AS ok\n"
+                     "  FROM puntos WHERE n = 1\n"
+                     "  UNION ALL\n"
+                     "  SELECT p.n, p.event_id,\n"
+                     "         CASE WHEN c.ok THEN p.ts_utc ELSE q.rts END,\n"
+                     "         CASE WHEN c.ok THEN p.lat ELSE q.rlat END,\n"
+                     "         CASE WHEN c.ok THEN p.lon ELSE q.rlon END,\n"
+                     "         c.ok\n"
+                     "  FROM plausibles q\n"
+                     "  JOIN puntos p ON p.n = q.n + 1\n"
+                     "  CROSS JOIN LATERAL (\n"
+                     "    SELECT (6371 * 2 * asin(sqrt(sin(radians(p.lat - q.rlat) / 2) ^ 2\n"
+                     "             + cos(radians(q.rlat)) * cos(radians(p.lat))\n"
+                     "               * sin(radians(p.lon - q.rlon) / 2) ^ 2)) - 0.3)\n"
+                     "           / greatest(extract(epoch FROM p.ts_utc - q.rts) / 3600.0, 0.000001) <= 70 AS ok\n"
+                     "  ) c\n"
                      ")\n"
 )
 
+# Se descartan los puntos a los que el vehiculo no pudo llegar desde el ultimo
+# punto ACEPTADO (70 km/h de media en linea recta, con 300 m de margen): es el
+# mismo filtro de plausibilidad del correlator, y tiene que ser el mismo. Sin el, una
+# placa mal leida o clonada deja en el mapa un "ultimo contacto" a 8 km del
+# anterior, 25 segundos despues, que el sistema ya habia descartado al correlacionar.
+# Es recursiva porque se compara contra el ultimo aceptado y no contra el anterior:
+# si no, una sola lectura falsa arrastraria a las buenas que vinieran despues. El
+# umbral de 70 esta escrito aqui y en RULE_VELOCIDAD_MAXIMA_PLAUSIBLE.
 RASTRO_WHERE = (
                      "FROM incidente i\n"
                      "JOIN events e ON e.event_id = i.event_id\n"
                      "WHERE e.geo_lat IS NOT NULL\n"
+                     "  AND i.event_id IN (SELECT event_id FROM plausibles WHERE ok)\n"
                      "ORDER BY e.ts_utc\n"
 )
 

@@ -175,6 +175,31 @@ type Resultado struct {
 	Parciales   []Parcial
 }
 
+// inicioDeLaEvidencia devuelve el instante del evento MAS ANTIGUO que sostiene la
+// deteccion.
+//
+// Cada regla fijaba el inicio de la ventana en el de su disparador: el reporte
+// ciudadano en el accidente, el boton de panico en el robo. Pero el disparador no
+// tiene por que ser lo primero que ocurre, y con trafico realista casi nunca lo
+// es: el sensor acustico oye el golpe y el reporte llega uno o dos minutos
+// despues, y un coche pasa rapido por una camara antes de que alguien pulse el
+// boton. La alerta declaraba entonces una ventana que EMPEZABA DESPUES de parte
+// de su propia evidencia, una contradiccion que cualquiera ve al mirarla.
+func inicioDeLaEvidencia(v Ventana, d *Deteccion) time.Time {
+	en := make(map[string]bool, len(d.Evidencia))
+	for _, id := range d.Evidencia {
+		en[id] = true
+	}
+
+	inicio := d.Inicio
+	for _, e := range v.Eventos {
+		if en[e.ID] && e.Momento.Before(inicio) {
+			inicio = e.Momento
+		}
+	}
+	return inicio
+}
+
 // Evaluar corre todas las reglas sobre la ventana.
 func Evaluar(v Ventana, cfg Config) Resultado {
 	var res Resultado
@@ -190,6 +215,7 @@ func Evaluar(v Ventana, cfg Config) Resultado {
 			// La zona la fija el motor y no cada regla: es una propiedad de
 			// la ventana evaluada, no de la regla concreta.
 			det.Zona = v.Zona
+			det.Inicio = inicioDeLaEvidencia(v, det)
 			res.Detecciones = append(res.Detecciones, *det)
 		}
 		if parcial != nil {
@@ -215,15 +241,24 @@ func reglaPosibleRobo(v Ventana, cfg Config) (*Deteccion, *Parcial) {
 		return nil, nil
 	}
 
-	rapidos := vehiculosRapidos(v, desde, cfg.UmbralVelocidad)
+	todosPanicos := panicos
+
+	// Solo cuentan los vehiculos que PUDIERON estar en el boton cuando se pulso.
+	//
+	// Comparar solo la zona no basta, y se vio fallar con trafico realista: una
+	// zona mide varios kilometros, de modo que un coche rapido leido a 1.7 km del
+	// boton un minuto ANTES de que lo pulsen —un conductor cualquiera, y un
+	// pulsador accidental— se daba por un robo con huida. Un coche que no pudo
+	// estar en el boton no puede estar huyendo de el.
+	panicos, rapidos := emparejarRobo(todosPanicos, vehiculosRapidos(v, desde, cfg.UmbralVelocidad), cfg)
 	if len(rapidos) == 0 {
 		// Boton de panico sin evento complementario: candidato a falso
 		// positivo si la ventana expira asi.
 		return nil, &Parcial{
 			Regla:      canonical.AlertPossibleRobbery,
-			Disparador: panicos[0].ID,
+			Disparador: todosPanicos[0].ID,
 			Faltante:   "vehiculo_a_alta_velocidad",
-			Expira:     panicos[0].Momento.Add(cfg.VentanaRobo),
+			Expira:     todosPanicos[0].Momento.Add(cfg.VentanaRobo),
 		}
 	}
 
@@ -235,6 +270,33 @@ func reglaPosibleRobo(v Ventana, cfg Config) (*Deteccion, *Parcial) {
 		Inicio:    panicos[0].Momento,
 		Fin:       v.Ahora,
 	}, nil
+}
+
+// emparejarRobo se queda con los botones y los vehiculos rapidos que pudieron
+// estar relacionados entre si.
+func emparejarRobo(panicos, rapidos []Evento, cfg Config) (ps, rs []Evento) {
+	paniquea := make(map[string]bool, len(panicos))
+	corre := make(map[string]bool, len(rapidos))
+
+	for _, p := range panicos {
+		for _, r := range rapidos {
+			if Compatibles(p, r, cfg.VelocidadMaximaPlausible) {
+				paniquea[p.ID], corre[r.ID] = true, true
+			}
+		}
+	}
+
+	for _, p := range panicos {
+		if paniquea[p.ID] {
+			ps = append(ps, p)
+		}
+	}
+	for _, r := range rapidos {
+		if corre[r.ID] {
+			rs = append(rs, r)
+		}
+	}
+	return ps, rs
 }
 
 // reglaAccidente: reporte ciudadano de accidente mas senal acustica.

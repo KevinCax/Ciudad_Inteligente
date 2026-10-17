@@ -43,7 +43,13 @@ type Config struct {
 	// El tablero usa el mismo valor escrito en su consulta; si se cambia aqui,
 	// hay que cambiarlo alli.
 	RutasSilencioMin int
-	HoraRetencion    string
+
+	// RutasVelMaxKmH es la velocidad media maxima, en linea recta, que se admite
+	// entre dos puntos del recorrido. Es la MISMA que el correlator usa para
+	// descartar lecturas imposibles (RULE_VELOCIDAD_MAXIMA_PLAUSIBLE): si fueran
+	// distintas, el recorrido contaria una historia que la alerta ya descarto.
+	RutasVelMaxKmH float64
+	HoraRetencion  string
 
 	// Politica de retencion (ADR-007)
 	DiasPlaca       int
@@ -96,6 +102,7 @@ func Load() (*Config, error) {
 		// un minuto en una tarea de media hora que bloquee a las siguientes.
 		RutasPorPasada:   envInt("RUTAS_POR_PASADA", 50),
 		RutasSilencioMin: envInt("RUTAS_SILENCIO_MIN", 30),
+		RutasVelMaxKmH:   float64(envInt("RUTAS_VEL_MAX_KMH", 70)),
 		HoraRetencion:    env("HORA_RETENCION", "03:30"),
 
 		DiasPlaca:       envInt("RETENCION_DIAS_PLACA", 90),

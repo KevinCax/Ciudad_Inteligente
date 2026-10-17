@@ -376,3 +376,116 @@ func TestDistanciaEntreZonasConocidas(t *testing.T) {
 		t.Fatalf("la distancia zona_10 - zona_6 deberia rondar 6.57 km, dio %.2f", km)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Casos que solo aparecieron con trafico realista
+// ---------------------------------------------------------------------------
+
+// Un coche rapido leido a 1.7 km del boton, un minuto ANTES de que lo pulsen, no
+// puede estar huyendo de el. Se vio como un robo con huida: la regla solo
+// comparaba zonas, y una zona mide varios kilometros.
+func TestRoboRechazaVehiculoQueNoPudoEstarEnElBoton(t *testing.T) {
+	boton := [2]float64{14.5927, -90.4888}
+	camara := [2]float64{14.6076, -90.4868} // ~1.7 km
+
+	v := ventana(
+		en(ev("cam", canonical.TypeSensorLPR, 0, map[string]any{"velocidad_estimada": 95.0}), camara),
+		en(ev("btn", canonical.TypePanicButton, 59, map[string]any{"tipo_de_alerta": "panico"}), boton),
+	)
+
+	res := Evaluar(v, ConfigPorDefecto())
+	if buscar(res, canonical.AlertPossibleRobbery) != nil {
+		t.Fatal("un coche a 1.7 km un minuto antes del pulsador no puede estar huyendo de el")
+	}
+	if buscarParcial(res, canonical.AlertPossibleRobbery) == nil {
+		t.Fatal("deberia quedar como coincidencia parcial: es un pulsador sin complemento")
+	}
+}
+
+// El mismo coche, a 200 m del boton, si es creible.
+func TestRoboAceptaVehiculoCercanoAlBoton(t *testing.T) {
+	boton := [2]float64{14.5927, -90.4888}
+	camara := [2]float64{14.5935, -90.4890} // ~100 m
+
+	v := ventana(
+		en(ev("btn", canonical.TypePanicButton, 0, map[string]any{"tipo_de_alerta": "panico"}), boton),
+		en(ev("cam", canonical.TypeSensorLPR, 40, map[string]any{"velocidad_estimada": 95.0}), camara),
+	)
+
+	if buscar(Evaluar(v, ConfigPorDefecto()), canonical.AlertPossibleRobbery) == nil {
+		t.Fatal("un coche rapido junto al boton, justo despues de pulsarlo, es un robo con huida")
+	}
+}
+
+// Si el coche tuvo tiempo de llegar, tambien cuenta: la victima puede pulsar el
+// boton despues de ver arrancar el coche.
+func TestRoboAceptaVehiculoPrevioSiLeDioTiempoDeLlegar(t *testing.T) {
+	boton := [2]float64{14.5927, -90.4888}
+	camara := [2]float64{14.5990, -90.4888} // ~700 m, a 100 s: 25 km/h
+
+	v := ventana(
+		en(ev("cam", canonical.TypeSensorLPR, 0, map[string]any{"velocidad_estimada": 95.0}), camara),
+		en(ev("btn", canonical.TypePanicButton, 100, map[string]any{"tipo_de_alerta": "panico"}), boton),
+	)
+
+	if buscar(Evaluar(v, ConfigPorDefecto()), canonical.AlertPossibleRobbery) == nil {
+		t.Fatal("700 m en 100 segundos son 25 km/h: perfectamente posible")
+	}
+}
+
+// El sensor acustico oye el golpe y el reporte llega despues. La ventana de la
+// alerta debe empezar en lo PRIMERO que ocurrio, no en el reporte: si no, declara
+// un inicio posterior a parte de su propia evidencia.
+func TestLaVentanaCubreLaEvidenciaAnteriorAlDisparador(t *testing.T) {
+	v := ventana(
+		ev("ac", canonical.TypeSensorAcustic, 0, map[string]any{"tipo_sonido_detectado": "vidrio_roto"}),
+		ev("rep", canonical.TypeCitizenReport, 100, map[string]any{"tipo_evento": "accidente"}),
+	)
+
+	det := buscar(Evaluar(v, ConfigPorDefecto()), canonical.AlertAccident)
+	if det == nil {
+		t.Fatal("deberia haber alerta de accidente")
+	}
+	if !det.Inicio.Equal(base) {
+		t.Fatalf("la ventana debe empezar con el sensor acustico (%s), empieza en %s", base, det.Inicio)
+	}
+}
+
+func TestCompatiblesSinCoordenadasNoDescarta(t *testing.T) {
+	a := ev("a", canonical.TypeSensorLPR, 0, nil)
+	b := ev("b", canonical.TypePanicButton, 30, nil)
+	if !Compatibles(a, b, 70) {
+		t.Fatal("sin coordenadas no hay nada que juzgar: ante la duda se acepta")
+	}
+}
+
+// Un coche leido siete minutos ANTES del pulsador, a 6.7 km, no es una
+// persecucion de ese pulsador. Se vio como una de las ocho "persecuciones" de una
+// simulacion que solo habia generado cuatro huidas.
+func TestNoAnclaEnUnPulsadorPosteriorEnMuchoTiempo(t *testing.T) {
+	cfg := ConfigPorDefecto()
+	v := ventanaVehiculo(
+		[]Evento{panico("p1", "zona_1", 437)}, // 7 min despues de la primera infraccion
+		lecturaRoja("l1", "zona_1", 0),
+		lecturaRapida("l2", "zona_1", 30, 110),
+	)
+
+	if buscar(EvaluarVehiculo(v, cfg), canonical.AlertVehiclePursuit) != nil {
+		t.Fatal("un pulsador 7 minutos despues de la primera infraccion no ancla la persecucion")
+	}
+}
+
+func TestNoAnclaSiElVehiculoNoPudoEstarEnElPulsador(t *testing.T) {
+	boton := [2]float64{14.5927, -90.4888}
+	lejos := [2]float64{14.6560, -90.4950} // ~7 km
+
+	v := ventanaVehiculo(
+		[]Evento{en(panico("p1", "zona_1", 40), boton)},
+		en(lecturaRoja("l1", "zona_1", 0), lejos),
+		en(lecturaRapida("l2", "zona_1", 20, 110), lejos),
+	)
+
+	if buscar(EvaluarVehiculo(v, ConfigPorDefecto()), canonical.AlertVehiclePursuit) != nil {
+		t.Fatal("un coche a 7 km del pulsador 40 segundos antes no puede estar huyendo de el")
+	}
+}

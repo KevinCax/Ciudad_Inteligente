@@ -71,7 +71,11 @@ func (s *Store) AlertasSinRuta(ctx context.Context, horas, maxIntentos, limite, 
 		  CROSS JOIN LATERAL jsonb_array_elements_text(c.evidence) AS ev(id)
 		),
 		arranque AS (
-		  SELECT b.alert_id, min(e.ts_utc) AS t0
+		  -- Donde empieza el recorrido: el boton de panico, que es el hecho del
+		  -- que se huye. Sin pulsador, el primer evento de la evidencia.
+		  SELECT b.alert_id,
+		         coalesce(min(e.ts_utc) FILTER (WHERE e.event_type = 'panic.button'),
+		                  min(e.ts_utc)) AS t0
 		  FROM base b JOIN events e ON e.event_id = b.event_id
 		  GROUP BY b.alert_id
 		),
@@ -111,9 +115,16 @@ func (s *Store) AlertasSinRuta(ctx context.Context, horas, maxIntentos, limite, 
 		  SELECT alert_id, event_id FROM rastro WHERE tramo = 0
 		),
 		puntos AS (
+		  -- Solo lo que ocurre desde el pulsador en adelante. Un coche leido ANTES
+		  -- de que lo pulsen puede ser evidencia de la alerta, pero no forma parte
+		  -- del camino de escape: forzar la ruta a pasar por ahi, y despues por el
+		  -- pulsador, dibuja un recorrido que nadie hizo.
 		  SELECT t.alert_id, e.ts_utc, e.geo_lat::float8 AS lat, e.geo_lon::float8 AS lon
-		  FROM todos t JOIN events e ON e.event_id = t.event_id
+		  FROM todos t
+		  JOIN arranque r ON r.alert_id = t.alert_id
+		  JOIN events e ON e.event_id = t.event_id
 		  WHERE e.geo_lat IS NOT NULL AND e.geo_lon IS NOT NULL
+		    AND e.ts_utc >= r.t0
 		),
 		conteo AS (
 		  SELECT alert_id, count(*) AS n FROM puntos GROUP BY alert_id

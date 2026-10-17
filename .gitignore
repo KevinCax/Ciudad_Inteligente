@@ -31,3 +31,6 @@ Thumbs.db
 # Datos de OSRM: el mapa de OpenStreetMap y sus indices derivados pesan
 # cientos de megas y se regeneran con "./make.sh rutas-preparar".
 deploy/osrm-data/
+
+# Resultado de cada corrida de la simulacion de la ciudad: que incidentes genero.
+test/load/verdad-simulacion.json

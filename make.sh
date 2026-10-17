@@ -95,6 +95,57 @@ case "${1:-help}" in
     docker compose -f deploy/docker-compose.cloud.yml                    --env-file deploy/.env up -d
     ;;
 
+  catalogo)
+    # Genera la red fija de sensores sobre el callejero y la guarda en
+    # deploy/sensores/catalogo-guatemala.json. Se hace una vez: un sensor real no
+    # cambia de sitio, asi que la simulacion lee el archivo y no lo regenera.
+    ( cd test/load && "$GO" run . -escenario catalogo )
+    ;;
+
+  ciudad)
+    # Simulacion de la ciudad en tiempo real: trafico, hora pico y valle, y
+    # incidentes que ocurren solos. Corre hasta Ctrl+C o hasta que pase el
+    # tiempo indicado.
+    #   ./make.sh ciudad              hasta Ctrl+C, frecuencia normal
+    #   ./make.sh ciudad 45m          durante 45 minutos
+    #   ./make.sh ciudad 45m 3        45 minutos con el triple de incidentes
+    #   ./make.sh ciudad 45m 3 07:30  igual, con la actividad de las 7:30 (hora pico)
+    CLAVE=$(grep -E '^INGESTOR_API_KEY=' deploy/.env 2>/dev/null | cut -d= -f2-)
+    ( cd test/load && "$GO" run . -escenario ciudad -api-key "$CLAVE"         -vivo "${2:-0}" -intensidad "${3:-1}" ${4:+-hora "$4"} )
+    ;;
+
+  evaluar)
+    # Contrasta lo que el sistema detecto con lo que la simulacion SABE que genero.
+    # Solo tiene sentido justo despues de ./make.sh ciudad, con la base vacia al
+    # empezar: si hay alertas de una corrida anterior, se contabilizan como falsas.
+    USR=$(grep -E '^GRAFANA_USER=' deploy/.env 2>/dev/null | cut -d= -f2-)
+    CLAVE=$(grep -E '^GRAFANA_PASSWORD=' deploy/.env 2>/dev/null | cut -d= -f2-)
+    ( cd test/load && "$GO" run . -escenario evaluar         -grafana-usuario "${USR:-admin}" -grafana-clave "$CLAVE" )
+    ;;
+
+  limpiar-datos)
+    # Vacia los DATOS (PostgreSQL, Redis, Elasticsearch) sin tocar contenedores,
+    # volumenes ni credenciales. Hace falta antes de cada demostracion: el
+    # evaluador cuenta como "de fondo" toda alerta que no pertenezca a un caso, y
+    # las de una corrida anterior contaminarian el resultado.
+    docker exec ciudad-postgres psql -U ciudad -d ciudades -q -c "TRUNCATE events, alerts, notifications, alert_routes, daily_event_metrics, daily_alert_metrics;"
+    docker exec ciudad-redis redis-cli FLUSHALL > /dev/null
+    for i in $(curl -s "http://localhost:9200/_cat/indices?h=index" | grep -E "^(events|alerts)-" || true); do curl -s -X DELETE "http://localhost:9200/$i" > /dev/null; done
+    echo "datos vaciados: PostgreSQL, Redis y los indices de Elasticsearch"
+    ;;
+
+  demo)
+    # Simulacion CONTROLADA: casos escritos uno a uno, cada uno con lo que se espera
+    # de el. Dura unos 8 minutos, y despues se evalua caso por caso.
+    #   ./make.sh limpiar-datos && ./make.sh demo
+    CLAVE=$(grep -E '^INGESTOR_API_KEY=' deploy/.env 2>/dev/null | cut -d= -f2-)
+    ( cd test/load && "$GO" run . -escenario demo -api-key "$CLAVE" )
+    echo ""
+    echo "esperando 75 s a que jobs calcule los recorridos..."
+    sleep 75
+    "$0" evaluar
+    ;;
+
   verificar)
     # Comprueba que lo correlacionado sea coherente y que el tablero lo
     # muestre. No genera carga: se lanza DESPUES de un escenario.
@@ -234,6 +285,11 @@ print('  %d de %d objetivos activos%s' % (len(d)-len(caidos), len(d),
     echo "Despliegue:  up up-cloud estado down logs config rutas-preparar"
     echo "Documentos:  adr"
     echo "Pruebas:     load [sostenido|rafaga|alertas|bulk|enunciado|tormenta [N]|persecucion]
-             verificar   (coherencia de extremo a extremo + lo que vera el tablero)"
+             verificar   (coherencia de extremo a extremo + lo que vera el tablero)
+             catalogo    (genera la red fija de sensores)
+             evaluar     (detectado vs verdad de la simulacion)
+             demo        (simulacion controlada: casos uno a uno, ~8 min, y los evalua)
+             limpiar-datos   (vacia los datos entre demostraciones)
+             ciudad [duracion] [intensidad]   (simulacion de la ciudad en tiempo real)"
     ;;
 esac
