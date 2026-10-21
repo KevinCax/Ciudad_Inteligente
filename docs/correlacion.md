@@ -182,7 +182,7 @@ problema de la zona sino de ese conductor.
 
 **Condición:** al menos **2** infracciones del **mismo vehículo**, más un botón
 de pánico en alguna de las zonas donde infringió.
-**Ventana:** 10 minutos · **Confianza:** 0.92
+**Ventana:** 15 minutos · **Confianza:** 0.92
 
 Esta regla rompe la premisa de todas las anteriores: **no agrupa por zona, sino
 por vehículo**. Y tiene que hacerlo, porque la secuencia que modela es

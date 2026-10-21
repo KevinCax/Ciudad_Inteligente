@@ -186,6 +186,15 @@ debería ser siempre cero.
 
 - **Un servicio más.** Seis en lugar de cinco: una imagen más que construir, un
   objetivo más que vigilar en Prometheus, un proceso más que puede caerse.
+- **La entrega es «al menos una vez» y el registro no la protege.** El servicio
+  entrega por el canal y después escribe la fila. Si la escritura falla por una causa
+  transitoria (por ejemplo, la base no responde durante un corte del enlace), no se
+  confirma el offset y la alerta se reprocesa: se vuelve a entregar, y el `UNIQUE`
+  solo evita la fila duplicada, no el aviso duplicado. Con el canal simulado es
+  inocuo. Con un canal real, un cuerpo de respuesta podría recibir el mismo aviso
+  varias veces. La corrección es registrar el aviso como `pendiente` antes de
+  entregar y actualizarlo después (el patrón outbox), y debe hacerse antes de
+  conectar un canal real.
 - **La entrega no es real.** El sistema sabe a quién habría que avisar y lo
   registra; no hay nadie al otro lado. Es la limitación principal y no se
   disimula en ningún tablero.
@@ -193,8 +202,8 @@ debería ser siempre cero.
   ahí se queda. Reintentarlo exige una política —cuántas veces, con qué
   espera, hasta cuándo— que depende de cada cuerpo de respuesta y que no tiene
   sentido inventar antes de que exista el convenio.
-- **No hay acuse de recibo.** La columna existe en la tabla; nada la rellena,
-  porque ningún organismo responde todavía.
+- **No hay acuse de recibo.** La tabla no tiene columna para él, porque ningún
+  organismo responde todavía. Sí existen `intentos` y `enviado_en`.
 
 ---
 
@@ -228,10 +237,11 @@ son órdenes de magnitud menos numerosas que los eventos.
 
 ### Si el sistema crece
 
-La tabla `notifications` crece con las alertas, no con los eventos: a razón de
+La tabla `notifications` se purga a los dos años, con el evento que la originó
+([ADR-007](007-privacidad-y-datos-personales.md) §4.3), y crece con las alertas, no con los eventos: a razón de
 dos o tres filas por alerta, su volumen es irrelevante frente a `events`.
-Cuando exista integración real, el reintento y el acuse son columnas que ya
-están previstas y un bucle que falta.
+Cuando exista integración real, el reintento tiene ya su columna (`intentos`) y falta el bucle; el acuse
+necesitará una columna nueva.
 
 ---
 
@@ -240,4 +250,4 @@ están previstas y un bucle que falta.
 - `services/notifier/` — implementación completa
 - `deploy/sql/002_trazabilidad.sql` — tabla `notifications` y sus restricciones
 - `deploy/grafana/provisioning/dashboards/04-trazabilidad.json` — tablero
-- [ADR-008](008-observabilidad-y-slo.md) §"Lo que falta" — el hueco que esto cierra
+- [ADR-008](008-observabilidad-y-slo.md) §"Lo que falta" — el otro canal, el del equipo que opera el sistema, que sigue pendiente

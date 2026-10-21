@@ -9,8 +9,7 @@
 
 ## 1. Contexto
 
-Hay que elegir el lenguaje y el tiempo de ejecución de los cinco
-microservicios. Es de las decisiones más caras de revertir del proyecto: una
+Hay que elegir el lenguaje y el tiempo de ejecución de los seis microservicios. Es de las decisiones más caras de revertir del proyecto: una
 vez escrito el sistema, cambiar de lenguaje significa escribirlo otra vez.
 
 El enunciado (sección 5) presenta su stack como **punto de partida, no como
@@ -21,8 +20,7 @@ Dos hechos del contexto pesan sobre la elección, y ambos vienen del cliente
 declarado en [ADR-001](001-plataforma-de-despliegue.md):
 
 **El hardware es limitado y propio.** La detección corre en servidores del
-centro de datos municipal. Sobre esas dos máquinas conviven los cinco
-microservicios, Kafka, Redis, la observabilidad y el sistema operativo. Cada
+centro de datos municipal. Sobre esas dos máquinas conviven los seis microservicios, Kafka, Redis, la observabilidad y el sistema operativo. Cada
 megabyte que consume un servicio es un megabyte que no está disponible para el
 broker, y **no hay elasticidad**: el hardware es el que se compró.
 
@@ -123,15 +121,15 @@ Kafka y Redis en dos máquinas fijas.
 
 | Aspecto | Medido en este sistema |
 |---|---|
-| Tamaño de imagen | 23 – 29 MB por servicio, completa |
-| Memoria residente | 15 – 19 MB por servicio |
+| Tamaño de imagen | 22 – 29 MB por servicio, completa |
+| Memoria residente | 13 – 18 MB por servicio |
 | Tiempo de arranque | 7 – 50 ms |
 
 Frente a eso, una imagen base de Java —`eclipse-temurin:17-jre-alpine`, **257
 MB antes de añadir la aplicación**— y un consumo de Spring Boot en el orden de
 los cientos de megabytes.
 
-Con cinco servicios más Kafka, Redis, Prometheus, Grafana y el sistema
+Con seis servicios más Kafka, Redis, Prometheus, Grafana, el motor de rutas y el sistema
 operativo sobre dos máquinas, esa diferencia no es cosmética: **decide si la
 plataforma cabe holgada o al límite**.
 
@@ -176,7 +174,7 @@ a cambio de una propiedad de despliegue, y se compensó por otra vía.
   línea de código, no una pelea contra la abstracción del framework.
 - Imágenes `distroless` sin intérprete de comandos ni gestor de paquetes, lo
   que reduce la superficie de ataque y sostiene el ADR de seguridad.
-- Menos dependencias directas: cinco bibliotecas por servicio, todas
+- Menos dependencias directas: entre tres y siete bibliotecas directas por servicio (jobs usa solo tres), todas
   justificables una a una.
 
 ### Negativas aceptadas
@@ -212,6 +210,20 @@ Medido el 21 de septiembre de 2026 sobre el sistema en ejecución.
 | ingestor | 23.3 MB | 15.0 MB | 9 |
 | correlator | 28.9 MB | 19.1 MB | 14 |
 | persister | 26.7 MB | 17.9 MB | 19 |
+
+Remedida el 21 de octubre de 2026, con el notifier ya incorporado:
+
+| Servicio | Imagen | Memoria residente |
+|---|---|---|
+| ingestor | 23.3 MB | 15.6 MB |
+| correlator | 29.0 MB | 18.0 MB |
+| persister | 26.7 MB | 15.6 MB |
+| indexer | 22.4 MB | 13.2 MB |
+| notifier | 27.3 MB | 15.6 MB |
+| jobs | 25.3 MB | 13.0 MB |
+
+El arranque y el comportamiento bajo carga de más abajo no se repitieron con el
+notifier: corresponden a la medición de septiembre.
 
 Referencia de contraste: `eclipse-temurin:17-jre-alpine`, una imagen base
 habitual para servicios Java, ocupa **257 MB sin incluir la aplicación**.

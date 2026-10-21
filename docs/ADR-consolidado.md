@@ -3,7 +3,7 @@
 **Proyecto:** Ciudad Inteligente — sistema de monitoreo perimetral urbano
 **Cliente hipotetico:** Municipalidad de Guatemala
 **Curso:** Arquitectura de Computadores II (040) — Universidad Mariano Galvez
-**Fecha:** 23/09/2026
+**Fecha:** 21/10/2026
 
 ---
 
@@ -50,8 +50,6 @@ pide defender.
 | Seguridad y privacidad de datos | ADR-007 |
 | Observabilidad y SLO | ADR-008 |
 
-Los ADR 002 y 003 no los exige el enunciado; documentan decisiones que
-condicionan a todas las demas.
 
 ## Indice
 
@@ -65,6 +63,8 @@ condicionan a todas las demas.
 8. [ADR-008: Observabilidad y objetivos de nivel de servicio](#adr-008-observabilidad-y-objetivos-de-nivel-de-servicio)
 9. [ADR-009: Orquestación de tareas periódicas — retirar Airflow](#adr-009-orquestación-de-tareas-periódicas-retirar-airflow)
 10. [ADR-010: Contenerización y orquestación — Docker Compose, sin Kubernetes](#adr-010-contenerización-y-orquestación-docker-compose-sin-kubernetes)
+11. [ADR-011: Aviso a terceros — servicio propio con registro de despacho](#adr-011-aviso-a-terceros-servicio-propio-con-registro-de-despacho)
+12. [ADR-012: Recorridos por calle — OSRM en la capa de borde](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde)
 
 ---
 
@@ -232,9 +232,9 @@ no debería estar haciendo.
 │                  Redis      │  └── Redis (ventanas)         │
 │                (dedupe)     │                               │
 │                             ▼                               │
-│         Persister · Indexer · Jobs ◄── correlated.alerts    │
+│  Persister · Indexer · Notifier · Jobs ◄── alertas          │
 │                             │                               │
-│         Prometheus · Grafana (observabilidad, local)        │
+│  Prometheus · Grafana · OSRM (observabilidad y rutas)       │
 │        ▼ tokenización de la placa antes de salir ▼          │
 └─────────────────────────────┬───────────────────────────────┘
                               │  TLS, egress controlado
@@ -246,15 +246,15 @@ no debería estar haciendo.
 El esquemático completo, con los segmentos de red y los puertos, está en
 `docs/diagramas/infraestructura.svg`.
 
-**En la LAN:** el ingestor, Kafka, Redis, el correlator, los tres servicios de
-salida —persister, indexer y jobs— y la observabilidad. Todo el recorrido
+**En la LAN:** el ingestor, Kafka, Redis, el correlator, los cuatro servicios de salida (persister, indexer, notifier y jobs), el motor de
+rutas OSRM ([ADR-012](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde)) y la observabilidad. Todo el recorrido
 evento → alerta.
 
 **En la nube:** PostgreSQL gestionada, Elasticsearch y Kibana. Archivo
 histórico y búsqueda, nada más.
 
-**Los servicios de salida son la pieza que hace posible el corte.** Consumen de
-Kafka y escriben por lotes en la nube. Ni el ingestor ni el correlator escriben
+**Los servicios de salida son la pieza que hace posible el corte.** Consumen de Kafka y escriben en la nube: el persister y el indexer por
+lotes, el notifier y jobs en volúmenes mucho menores. Ni el ingestor ni el correlator escriben
 fuera de la LAN, de modo que la detección no depende del enlace a internet.
 
 **La observabilidad también se queda dentro, y no por comodidad.** Recolectar
@@ -304,7 +304,8 @@ Si el enlace a internet se cae:
   reglas se evalúan en memoria.
 - Las alertas **siguen publicándose** en Kafka, donde quedan disponibles para
   cualquier consumidor local.
-- Lo único que se detiene es el **archivado**. El persister acumula retraso y
+- Lo único que se detiene es el **archivado** y el registro de los avisos a
+  terceros ([ADR-011](#adr-011-aviso-a-terceros-servicio-propio-con-registro-de-despacho)). El persister acumula retraso y
   reintenta; los eventos y alertas esperan en Kafka, que los retiene 72 horas
   y 7 días respectivamente.
 
@@ -348,8 +349,9 @@ paga una vez cada cien eventos en lugar de una vez por evento.
   tableros sirven para análisis, no para despacho.
 - **Costo de transferencia de datos.** Bajo en volumen —eventos JSON pequeños—
   pero distinto de cero y creciente con el número de sensores.
-- **Custodia de la llave de tokenización.** Aparece un secreto crítico que hay
-  que rotar, respaldar y proteger. Si se pierde, el histórico queda
+- **Custodia de la llave de tokenización.** Aparece un secreto crítico que hay que rotar, respaldar y proteger, y que
+  usan tres servicios (persister, indexer y correlator), de modo que hay tres
+  entornos donde custodiarlo ([ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube)). Si se pierde, el histórico queda
   irreversiblemente anonimizado; si se filtra, la seudonimización pierde su
   valor.
 - **Dependencia parcial del proveedor** para la base gestionada. Se mitiga
@@ -455,7 +457,7 @@ formato APA 7 en el informe final:
   formato de los ADR.
 - [ADR-007](README.md) — tokenización de placas en la frontera LAN–nube.
 - [ADR-008](README.md) — definición y medición del SLO.
-- `deploy/README.md` — materialización del punto de
+- [deploy/README.md](../../deploy/README.md) — materialización del punto de
   corte en los archivos de despliegue.
 
 ---
@@ -471,8 +473,7 @@ formato APA 7 en el informe final:
 
 ## 1. Contexto
 
-Hay que elegir el lenguaje y el tiempo de ejecución de los cinco
-microservicios. Es de las decisiones más caras de revertir del proyecto: una
+Hay que elegir el lenguaje y el tiempo de ejecución de los seis microservicios. Es de las decisiones más caras de revertir del proyecto: una
 vez escrito el sistema, cambiar de lenguaje significa escribirlo otra vez.
 
 El enunciado (sección 5) presenta su stack como **punto de partida, no como
@@ -483,8 +484,7 @@ Dos hechos del contexto pesan sobre la elección, y ambos vienen del cliente
 declarado en [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube):
 
 **El hardware es limitado y propio.** La detección corre en servidores del
-centro de datos municipal. Sobre esas dos máquinas conviven los cinco
-microservicios, Kafka, Redis, la observabilidad y el sistema operativo. Cada
+centro de datos municipal. Sobre esas dos máquinas conviven los seis microservicios, Kafka, Redis, la observabilidad y el sistema operativo. Cada
 megabyte que consume un servicio es un megabyte que no está disponible para el
 broker, y **no hay elasticidad**: el hardware es el que se compró.
 
@@ -585,15 +585,15 @@ Kafka y Redis en dos máquinas fijas.
 
 | Aspecto | Medido en este sistema |
 |---|---|
-| Tamaño de imagen | 23 – 29 MB por servicio, completa |
-| Memoria residente | 15 – 19 MB por servicio |
+| Tamaño de imagen | 22 – 29 MB por servicio, completa |
+| Memoria residente | 13 – 18 MB por servicio |
 | Tiempo de arranque | 7 – 50 ms |
 
 Frente a eso, una imagen base de Java —`eclipse-temurin:17-jre-alpine`, **257
 MB antes de añadir la aplicación**— y un consumo de Spring Boot en el orden de
 los cientos de megabytes.
 
-Con cinco servicios más Kafka, Redis, Prometheus, Grafana y el sistema
+Con seis servicios más Kafka, Redis, Prometheus, Grafana, el motor de rutas y el sistema
 operativo sobre dos máquinas, esa diferencia no es cosmética: **decide si la
 plataforma cabe holgada o al límite**.
 
@@ -638,7 +638,7 @@ a cambio de una propiedad de despliegue, y se compensó por otra vía.
   línea de código, no una pelea contra la abstracción del framework.
 - Imágenes `distroless` sin intérprete de comandos ni gestor de paquetes, lo
   que reduce la superficie de ataque y sostiene el ADR de seguridad.
-- Menos dependencias directas: cinco bibliotecas por servicio, todas
+- Menos dependencias directas: entre tres y siete bibliotecas directas por servicio (jobs usa solo tres), todas
   justificables una a una.
 
 ### Negativas aceptadas
@@ -674,6 +674,20 @@ Medido el 21 de septiembre de 2026 sobre el sistema en ejecución.
 | ingestor | 23.3 MB | 15.0 MB | 9 |
 | correlator | 28.9 MB | 19.1 MB | 14 |
 | persister | 26.7 MB | 17.9 MB | 19 |
+
+Remedida el 21 de octubre de 2026, con el notifier ya incorporado:
+
+| Servicio | Imagen | Memoria residente |
+|---|---|---|
+| ingestor | 23.3 MB | 15.6 MB |
+| correlator | 29.0 MB | 18.0 MB |
+| persister | 26.7 MB | 15.6 MB |
+| indexer | 22.4 MB | 13.2 MB |
+| notifier | 27.3 MB | 15.6 MB |
+| jobs | 25.3 MB | 13.0 MB |
+
+El arranque y el comportamiento bajo carga de más abajo no se repitieron con el
+notifier: corresponden a la medición de septiembre.
 
 Referencia de contraste: `eclipse-temurin:17-jre-alpine`, una imagen base
 habitual para servicios Java, ocupa **257 MB sin incluir la aplicación**.
@@ -772,8 +786,8 @@ demás.
 
 ## 1. Contexto
 
-El sistema tiene cinco microservicios —ingestor, correlator, persister, indexer
-y jobs— más una herramienta de carga. Hay que decidir cómo se organizan en
+El sistema tiene seis microservicios (ingestor, correlator, persister, indexer,
+jobs y notifier) más una herramienta de carga. Hay que decidir cómo se organizan en
 control de versiones.
 
 La decisión parece administrativa y no lo es: determina si los servicios pueden
@@ -782,7 +796,8 @@ arquitectura de microservicios de un monolito repartido en carpetas.
 
 ### El problema concreto: el contrato compartido
 
-Los cinco servicios hablan el mismo evento canónico v1.0. En cuanto se comparte
+Los servicios hablan dos contratos: el evento canónico v1.0 y la alerta
+correlacionada v1.0. En cuanto se comparte
 una definición entre servicios aparece la tentación de extraerla a una
 biblioteca común, y con ella el riesgo de acoplarlos.
 
@@ -868,7 +883,8 @@ Ciudad_Inteligente_GO/
 │   ├── correlator/  go.mod → ciudadinteligente/correlator
 │   ├── persister/   go.mod → ciudadinteligente/persister
 │   ├── indexer/     go.mod → ciudadinteligente/indexer
-│   └── jobs/        go.mod → ciudadinteligente/jobs
+│   ├── jobs/        go.mod → ciudadinteligente/jobs
+│   └── notifier/    go.mod → ciudadinteligente/notifier
 ├── deploy/
 ├── docs/adr/
 └── test/load/       go.mod propio
@@ -900,15 +916,15 @@ make check-contracts
 Compara cada copia con la fuente de verdad y falla si difieren. Corre dentro de
 `make check`, de modo que nadie puede olvidarla.
 
-### 3.2 Por qué monorepo y no cinco repositorios
+### 3.2 Por qué monorepo y no seis repositorios
 
 Lo que decide es el **costo de cambiar el contrato**.
 
 En polyrepo, subir el evento canónico a la versión 1.1 significa: publicar el
-contrato nuevo, abrir cinco pull requests, coordinar su orden de integración y
+contrato nuevo, abrir seis pull requests, coordinar su orden de integración y
 verificar que ninguna combinación intermedia rompa el sistema. En monorepo es
-un commit que toca seis archivos y que la comprobación de contratos valida de
-una vez.
+un commit que toca la fuente y sus ocho copias, y que la comprobación de contratos
+valida de una vez.
 
 Con un equipo de estudiantes y una fecha fija, esa diferencia es lo que decide.
 
@@ -929,7 +945,7 @@ módulos separados. El monorepo es solo dónde viven hoy.
 
 ### Positivas
 
-- Los cinco servicios se compilan y despliegan por separado, verificado en el
+- Los seis servicios se compilan y despliegan por separado, verificado en el
   despliegue real.
 - Dependencias mínimas por servicio, lo que reduce la superficie que auditar.
 - Un cambio de contrato es un commit atómico y verificado.
@@ -938,9 +954,12 @@ módulos separados. El monorepo es solo dónde viven hoy.
 
 ### Negativas aceptadas
 
-- **El contrato está copiado en cinco sitios.** La comprobación automática
-  impide la divergencia, pero sigue siendo duplicación que hay que sincronizar
-  al cambiarlo.
+- **El contrato está copiado en ocho sitios**: cuatro copias del evento (ingestor,
+  correlator, persister e indexer) y cuatro de la alerta (correlator, persister,
+  indexer y notifier). La comprobación automática impide la divergencia, pero sigue
+  siendo duplicación que hay que sincronizar al cambiarlo. Las listas de quién recibe
+  cada contrato están en el `Makefile` y la comprobación se deriva de ellas: antes
+  estaban escritas copia por copia y `check-contracts` solo verificaba 3 de 7.
 - **Hay código repetido entre servicios**: el arranque, la carga de
   configuración, el registro estructurado y el bucle de lotes se parecen mucho
   entre el persister y el indexer. Es deliberado —extraerlo los acoplaría— pero
@@ -948,8 +967,7 @@ módulos separados. El monorepo es solo dónde viven hoy.
 - **La independencia hay que sostenerla a propósito.** Nada impide técnicamente
   que alguien añada un `replace ../otro-servicio` y rompa la propiedad. Es una
   disciplina, no una garantía del compilador.
-- **El repositorio crece.** Cinco módulos significan cinco `go.sum` y cinco
-  árboles de dependencias que actualizar por separado.
+- **El repositorio crece.** Seis módulos significan seis `go.sum` y seis árboles de dependencias que actualizar por separado.
 
 ## 5. Impacto en el negocio
 
@@ -957,7 +975,7 @@ módulos separados. El monorepo es solo dónde viven hoy.
 
 ### Qué se decidió
 
-Que los cinco programas del sistema vivan **en un mismo archivo de proyecto,
+Que los seis programas del sistema vivan **en un mismo archivo de proyecto,
 pero como piezas independientes**: se pueden actualizar y reemplazar uno por uno,
 sin tocar los demás.
 
@@ -993,7 +1011,7 @@ añade licencias ni equipos.
   como ADR.
 - [ADR-002](#adr-002-lenguaje-y-runtime-de-los-microservicios-go) — la elección de Go determina que la
   unidad de independencia sea el módulo.
-- `contracts/README.md` — por qué el contrato es un
+- [contracts/README.md](../../contracts/README.md) — por qué el contrato es un
   schema y no una biblioteca.
 - `make.sh check-contracts` — la comprobación que impide la divergencia.
 
@@ -1023,8 +1041,8 @@ Eso le impone tres requisitos:
    confirmado, y eso solo funciona si los mensajes siguen ahí.
 2. **Particionado por clave**, para que los eventos de una misma zona conserven
    su orden relativo. La correlación por ventana depende de ello.
-3. **Varios consumidores independientes** sobre el mismo flujo: correlator,
-   persister e indexer leen `events.standardized` sin interferirse.
+3. **Varios consumidores independientes** sobre el mismo flujo: correlator, persister e indexer leen `events.standardized` sin interferirse, y
+   persister, indexer y notifier hacen lo mismo con `correlated.alerts`.
 
 El enunciado lo plantea como decisión a documentar (sección 4.2): Kafka frente a
 RabbitMQ frente a un servicio gestionado, con el trade-off de rendimiento,
@@ -1144,6 +1162,7 @@ sincronizar.
 | `correlated.alerts` | 7 d | Las alertas alimentan análisis posteriores |
 | `events.dlq` | 14 d | Su función es que alguien pueda revisarla y reprocesar |
 | `acks` | `all` | El `202` al cliente significa que Kafka confirmó |
+| Primera lectura de un grupo nuevo | persister e indexer desde el principio; correlator y notifier desde lo último | Archivar de más es inocuo; reprocesar alertas viejas no (ADR-011 §3.4) |
 | Creación automática de topics | desactivada | Un nombre mal escrito debe fallar, no crear un topic fantasma |
 
 El factor de replicación de 1 merece una nota: **es una limitación consciente
@@ -1201,6 +1220,13 @@ reparte las claves igual.
   nombre legible impide arrancar con un error poco evidente.
 - **Factor de replicación 1 en laboratorio**: un solo broker es un punto único
   de fallo, y subirlo en producción es trabajo pendiente.
+- **`kafka-go` no detecta un topic creado después de unirse al grupo.** Un
+  consumidor que arranca antes de que exista su topic queda con cero particiones
+  asignadas, sin error ni aviso, y el grupo figura como estable. Se vio en un Kafka
+  recién creado: el persister y el notifier no consumían las alertas porque
+  arrancaron antes que `kafka-init`, y las alertas no se archivaban ni se
+  notificaban. Se resolvió haciendo que cinco servicios esperen a `kafka-init`
+  (`service_completed_successfully`).
 - **Conceptos que el equipo debe dominar**: offsets, grupos de consumo,
   rebalanceo y retención. Es más superficie de aprendizaje que una cola simple.
 
@@ -1286,6 +1312,8 @@ especializada es aparentemente fuerte.
 | `events` | ~1,7 M/día, 2–3 GB/día | Por rango de tiempo, zona y tipo; por `event_id` al investigar |
 | `alerts` | decenas al día | Por rango, zona y tipo; con su evidencia |
 | Agregados diarios | cientos de filas/día | Por rango de fechas |
+| `notifications` | de una a tres filas por alerta | Por alerta y por organismo ([ADR-011](#adr-011-aviso-a-terceros-servicio-propio-con-registro-de-despacho)) |
+| `alert_routes` | una fila por alerta | Por alerta; geometría del recorrido ([ADR-012](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde)) |
 
 Dos observaciones que condicionan la decisión:
 
@@ -1405,6 +1433,10 @@ Kafka ──▶ Persister ──▶ PostgreSQL     archivo autoritativo
       └──▶ Indexer   ──▶ Elasticsearch búsqueda y análisis
 ```
 
+Un tercer escritor, el notifier, registra los avisos en PostgreSQL, y `jobs`
+escribe los agregados y los recorridos. Ninguno de los dos toca el camino de los
+eventos.
+
 Ambos consumen del broker de forma independiente
 ([ADR-004](#adr-004-broker-de-eventos-kafka-en-modo-kraft)). Esa separación tiene una consecuencia
 operativa valiosa: **si Elasticsearch se cae, el archivo sigue completo**, y al
@@ -1479,6 +1511,12 @@ La escritura de un lote de cien tardó decenas de milisegundos en las pruebas.
   borrado a los dos años, y las consultas por rango se degradarán. El
   particionado nativo de PostgreSQL por mes es la solución, y **está
   pendiente**.
+- **El esquema ya no se aplica solo con el volumen vacío.** El directorio de
+  inicialización de PostgreSQL solo corre la primera vez, de modo que añadir una
+  tabla obligaba a borrar los datos. Un servicio de un solo uso, `postgres-migrate`,
+  aplica `deploy/sql/*.sql` en cada arranque; todo lleva `IF NOT EXISTS`. La base de
+  producción es gestionada y no está en ningún Compose: ahí el paso es manual y
+  está en `deploy/README.md`.
 - **Compresión limitada** frente a un motor especializado: más costo de
   almacenamiento en la nube.
 - **Dos motores que operar**, con sus dos modelos de retención.
@@ -1551,7 +1589,7 @@ adicional, solo trabajo técnico.
   contenido del payload.
 - [ADR-009](#adr-009-orquestación-de-tareas-periódicas-retirar-airflow) — indexación en tiempo
   casi real y agregados diarios.
-- `deploy/sql/001_schema.sql` — esquema, índices y restricciones.
+- `deploy/sql/` (001 a 004) — esquema, índices, restricciones, avisos y recorridos.
 
 ---
 
@@ -1595,6 +1633,8 @@ no fingir que es cero.
 | Caída de Redis | Baja | Se pierde la ventana de correlación |
 | Caída de PostgreSQL | Baja | Se detiene el archivo histórico |
 | Petición abortada por el cliente | Alta bajo carga | Estado inconsistente |
+| Consumidor que se une antes de que exista su topic | Alta en un arranque en frío | No consume, sin error ni aviso |
+| Motor de rutas no disponible | Media | Alertas sin recorrido |
 
 ## 2. Opciones consideradas
 
@@ -1733,6 +1773,7 @@ garantiza a su manera:
 | Ingestor | `SET NX EX` sobre `ingest:seen:{event_id}` | Una operación atómica |
 | Correlator | `SET NX EX` sobre `corr:seen:{event_id}` | Ídem |
 | Persister | `INSERT ... ON CONFLICT DO NOTHING` | Lo resuelve la clave primaria |
+| Notifier | `UNIQUE (alert_id, organismo)` y `ON CONFLICT DO NOTHING` | Protege el registro, no la entrega: ver [ADR-011](#adr-011-aviso-a-terceros-servicio-propio-con-registro-de-despacho) §3.3 |
 
 La forma intuitiva —comprobar si la clave existe y después escribirla— deja
 entre ambas llamadas un hueco por el que cabe otra instancia procesando el
@@ -1768,7 +1809,20 @@ ya murió. Se usa `context.WithoutCancel`, que conserva los valores —el
 `trace_id` entre ellos— pero descarta la cancelación, con un plazo acotado para
 que no se quede colgada.
 
-### 3.7 Matriz de comportamiento ante fallos
+### 3.7 Un consumidor no debe unirse antes de que exista su topic
+
+Se descubrió al arrancar un Kafka recién creado. `kafka-go` no se entera de que
+un topic aparece después de que el consumidor se unió al grupo: este queda
+«estable» con cero particiones asignadas y no consume nada, sin error y sin
+métrica que lo delate. Persister y notifier no consumían las alertas, que por eso
+no se archivaban ni se notificaban.
+
+La corrección es de orden de arranque: persister, indexer, notifier, correlator e
+ingestor esperan a que `kafka-init` termine (`service_completed_successfully`).
+Que el síntoma sea silencioso es el motivo de que figure aquí: es de la misma
+familia que el resto de esta decisión, un fallo que no se manifiesta solo.
+
+### 3.8 Matriz de comportamiento ante fallos
 
 | Componente caído | Ingesta | Detección | Archivo | Respuesta al cliente |
 |---|---|---|---|---|
@@ -1776,6 +1830,8 @@ que no se quede colgada.
 | PostgreSQL | Continúa | Continúa | Se detiene y acumula | `202` |
 | Enlace a la nube | Continúa | Continúa | Se detiene y acumula | `202` |
 | Elasticsearch / Grafana | Continúa | Continúa | Continúa | `202` |
+| Notifier | Continúa | Continúa | Continúa; los avisos esperan en Kafka | `202` |
+| Motor de rutas (OSRM) | Continúa | Continúa | Continúa; los recorridos se reintentan hasta 3 veces | `202` |
 | Redis | **Se detiene** | Se degrada | Continúa | `503` |
 | Kafka | **Se detiene** | Se detiene | Se detiene | `503` |
 
@@ -1944,7 +2000,7 @@ La implementación está terminada y verificada.
 - Enunciado del proyecto final, sección 4.2 — resiliencia y tolerancia a fallos.
 - [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube) — la plataforma híbrida es la que
   descarta el outbox transaccional.
-- `deploy/README.md` — procedimiento para reproducir la
+- [deploy/README.md](../../deploy/README.md) — procedimiento para reproducir la
   prueba de caída y recuperación.
 - `services/*/internal/broker/kafka.go` — confirmación manual de offsets y
   publicación en la DLQ.
@@ -2123,7 +2179,7 @@ Productor ──en claro──▶ Ingestor ──en claro──▶ Kafka (LAN) �
                                   PostgreSQL            Elasticsearch
 ```
 
-Solo **dos componentes escriben fuera de la LAN**: el persister y el indexer
+Solo **dos componentes escriben eventos fuera de la LAN**: el persister y el indexer
 ([ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube)). Ambos se sitúan exactamente sobre
 la frontera, y ambos aplican la misma transformación con **la misma llave**.
 
@@ -2138,8 +2194,10 @@ control municipal en claro, basta revisar dos componentes**, y ambos comparten
 el mismo paquete de tokenización. No hay que rastrear cada consulta del sistema
 buscando fugas.
 
-El servicio `jobs` también habla con la nube, pero solo para borrar y agregar:
-no escribe datos personales nuevos.
+El servicio `jobs` también habla con la nube: borra, agrega y, desde el
+[ADR-012](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde), guarda la geometría de los recorridos, que
+sí es ubicación y por eso sigue la misma retención que las coordenadas (ver 4.3). El notifier escribe los avisos, que no contienen
+placas ni coordenadas.
 
 Dentro de la LAN la placa circula en claro a propósito. El broker no sale de la
 red municipal, y la correlación necesita el valor original para agrupar
@@ -2174,7 +2232,7 @@ despreciables y deja un identificador más manejable en registros y tableros.
 
 | Aspecto | Decisión |
 |---|---|
-| Ubicación | On-premise, en el entorno del persister |
+| Ubicación | On-premise, en el entorno del persister, el indexer y el correlator |
 | Versionado | **Nunca** en el repositorio; `.env` está en `.gitignore` |
 | Generación | `openssl rand -hex 32` |
 | Respaldo | Cifrado, con procedimiento documentado y custodia separada |
@@ -2185,6 +2243,38 @@ advierten en el registro**: `"PLATE_HMAC_KEY no configurada: las placas se
 archivarán en claro en la nube"`. Se prefirió advertir a impedir el arranque
 para no convertir un descuido de configuración en una caída del sistema de
 seguridad ciudadana.
+
+### 3.6 El correlator también custodia la llave, por un motivo distinto
+
+Al incorporarse la correlación por vehículo
+([ADR-011](#adr-011-aviso-a-terceros-servicio-propio-con-registro-de-despacho) documenta el servicio hermano; la regla
+vive en el correlator), un tercer servicio pasó a necesitar la llave. Conviene
+ser preciso sobre por qué, porque **no** es el mismo motivo que en los otros
+dos.
+
+El persister y el indexer la usan para que el dato personal no cruce a la nube:
+tokenizan en la frontera. El correlator no escribe nada fuera de la LAN y, por
+tanto, no tiene ninguna frontera que proteger. La usa para **indexar por
+seudónimo la ventana de correlación de vehículo** en Redis, y eso resuelve dos
+problemas a la vez:
+
+1. **La clave de Redis deja de ser una matrícula.** La ventana por vehículo es
+   un `corr:plate:<seudónimo>`. Si se indexara por la placa en claro, un `SCAN`
+   sobre Redis devolvería el listado de matrículas que han circulado por la
+   ciudad en los últimos treinta minutos: el estado transitorio de la
+   correlación se habría convertido en un fichero de vehículos.
+
+2. **El seudónimo coincide con el archivado.** Al usar la misma llave, el
+   identificador con el que el correlator agrupa es idéntico al que el
+   persister escribe en PostgreSQL. Eso es lo que permite partir de una alerta
+   de persecución y reconstruir el histórico del vehículo sin que la placa en
+   claro salga nunca de la LAN.
+
+Esto amplía la superficie de custodia de dos servicios a tres, y es una
+contrapartida real: una llave en más entornos es una llave con más
+oportunidades de filtrarse. Se acepta porque la alternativa —indexar por la
+placa en claro— es estrictamente peor en el mismo eje que esta decisión intenta
+proteger.
 
 ## 4. Lo que esta decisión NO protege
 
@@ -2210,6 +2300,40 @@ Es un compromiso consciente: sin seudónimo estable no hay correlación por
 vehículo, y sin correlación por vehículo la cámara de lectura de placas pierde
 su propósito.
 
+**Actualización (2026-10-03): esto ha dejado de ser un efecto colateral.**
+
+Cuando se escribió esta sección, el rastreo de un vehículo era una
+*posibilidad* que el diseño no impedía. Ya no: el sistema incorpora una regla
+de correlación que encadena las infracciones de un mismo vehículo a través de
+varias zonas, y un tablero que dibuja su recorrido sobre el mapa. El rastreo
+pasó de riesgo residual a funcionalidad deliberada.
+
+El cambio no altera qué dato se guarda —no se almacena nada que no se
+almacenara antes— pero sí altera lo que hay que declarar ante el área legal. Un
+dato que *podría* usarse para seguir a una persona y un dato que *se usa* para
+eso no son equivalentes a efectos de proporcionalidad, aunque la base de datos
+sea idéntica.
+
+Tres límites acotan el uso, y conviene que figuren por escrito:
+
+- **El plazo.** El rastreo alcanza `RETENCION_DIAS_PLACA` días (90 por
+  defecto). Pasado ese plazo el trabajo de retención elimina
+  `placa_vehicular` del payload y el vehículo deja de ser seguible. No es una
+  limitación técnica: es el plazo que acota la vigilancia.
+- **El disparador.** La regla no se activa por circular, sino por acumular
+  infracciones **y** existir un botón de pánico en la misma zona. Un vehículo
+  que respeta las normas no genera ninguna cadena por mucho que circule.
+- **El alcance de la ventana.** La correlación en vivo solo mira quince minutos atrás; el histórico de noventa días requiere una consulta explícita a la base,
+  que es una acción deliberada de un operador y no un proceso automático.
+
+Queda pendiente que la Municipalidad apruebe expresamente este uso, como ya
+estaba pendiente la aprobación de los plazos de retención.
+
+**Actualización (2026-10-21):** el recorrido ahora se dibuja siguiendo las calles
+([ADR-012](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde)). El motor de rutas corre en la LAN, de
+modo que las coordenadas no salen a ningún tercero para calcularlo; pero la
+geometría resultante se guarda en la nube, y de ello trata el apartado 4.3.
+
 ### 4.2 La retención está implementada, con un matiz
 
 El enunciado pregunta cómo se **protegen, anonimizan o retienen** los datos.
@@ -2234,7 +2358,50 @@ propuesta técnica, no una decisión institucional. **La Municipalidad debe
 aprobarlos formalmente**, porque determinan durante cuánto tiempo conserva
 datos personales de ciudadanos y eso no es una decisión de ingeniería.
 
-### 4.3 Sin control de acceso granular
+### 4.3 Los recorridos guardados y los avisos siguen la retención
+
+Esta sección recoge una incoherencia que existió y ya está corregida. Se deja
+escrita porque explica por qué la política abarca más que los eventos.
+
+Al incorporar los recorridos por calle ([ADR-012](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde)),
+`jobs` pasó a guardar en `alert_routes` la geometría del recorrido de cada alerta
+con botón de pánico y un solo vehículo: una secuencia de coordenadas que reproduce
+por dónde circuló. No lleva la placa, pero sí el `alert_id`, que enlaza con los
+eventos y, mientras existan, con el seudónimo. La retención solo actuaba sobre
+`events`, de modo que una trayectoria sobrevivía indefinidamente aunque el evento
+del que salía ya hubiera perdido sus coordenadas.
+
+La retención aplica ahora cinco fases, de la más reciente a la más antigua:
+
+| Fase | Qué hace | Plazo |
+|---|---|---|
+| 1 | Elimina el seudónimo de la placa de los eventos | 90 días |
+| 2 | Elimina las coordenadas de los eventos | 365 días |
+| 3 | Borra los eventos | 730 días |
+| 4 | Borra los **recorridos guardados** (`alert_routes`) | 365 días, el de las coordenadas |
+| 5 | Borra los **avisos** (`notifications`) | 730 días, el del borrado |
+
+Dos criterios que conviene saber:
+
+- **La edad de un recorrido es la de su alerta, no la de su cálculo.** La ruta se
+  recalcula mientras el rastro crece, y su fecha de cálculo no dice cuándo ocurrió
+  el incidente. Si la alerta ya no existe, se usa la fecha de cálculo, para que una
+  fila huérfana no se quede para siempre.
+- **El recorrido sigue el plazo de las coordenadas porque es lo mismo:**
+  coordenadas encadenadas. Un año de plazo para la coordenada de un evento y
+  indefinido para su trayectoria no tendría sentido.
+
+Se verificó con una prueba automática contra un PostgreSQL real, en un esquema
+temporal para no tocar datos de nadie, y sobre el sistema en ejecución: una alerta
+de 400 días con su recorrido y un aviso de 800 días se eliminaron al lanzar la
+retención a mano, y los datos recientes quedaron intactos.
+
+**Lo que no se purga, y por qué.** Las alertas (`alerts`) no se borran: guardan tipo,
+zona, ventana, puntaje e identificadores de evidencia, sin placa ni coordenadas, y
+son el registro al que apuntan los agregados diarios y los avisos. Es una decisión
+que, como los plazos del apartado 4.2, debe aprobar la Municipalidad.
+
+### 4.4 Sin control de acceso granular
 
 Cualquiera con credenciales de la base ve todo el histórico. No hay roles que
 distingan entre consultar agregados y consultar eventos individuales. Los
@@ -2246,7 +2413,8 @@ directo a la base no está segmentado.
 ### Positivas
 
 - La nube nunca recibe placas identificables.
-- Auditable en un solo punto del sistema.
+- Auditable en pocos puntos: los dos servicios que archivan eventos y el que
+  guarda recorridos, que además cae bajo la misma retención.
 - La correlación por vehículo se conserva íntegra.
 - El punto de corte del despliegue y la frontera de privacidad coinciden: una
   sola decisión arquitectónica resuelve dos problemas.
@@ -2265,8 +2433,8 @@ directo a la base no está segmentado.
   útil para investigación. Es el reverso exacto de la propiedad de seguridad.
 - **Los datos siguen siendo personales.** Todas las obligaciones de tratamiento
   aplican igual; la seudonimización reduce el riesgo, no la responsabilidad.
-- **La retención queda pendiente**, con el archivo creciendo sin límite mientras
-  tanto.
+- **Las alertas no se purgan.** No llevan datos personales, pero se conservan
+  sin plazo hasta que la Municipalidad decida uno (apartado 4.3).
 
 ## 6. Evidencia medida
 
@@ -2494,7 +2662,7 @@ OpenTelemetry con un recolector y un backend de trazas.
 
 **En contra**
 
-- Complejidad operativa desproporcionada para cinco servicios y un equipo
+- Complejidad operativa desproporcionada para seis servicios y un equipo
   reducido.
 - Buena parte del beneficio se obtiene propagando el `trace_id` por registros y
   cabeceras de Kafka, que es mucho más barato.
@@ -2573,9 +2741,7 @@ Ejemplo, la del SLO 1:
 | `aviso` | Se consume presupuesto de error | En horario laboral |
 | `info` | Conviene saberlo | Revisión periódica |
 
-La regla `ServicioCaido` distingue en su propia acción: si el caído es el
-persister, la detección continúa y solo se retrasa el archivo; si es el
-ingestor o el correlator, **la ciudad ha dejado de detectar incidentes** y es
+La regla `ServicioCaido` distingue en su propia acción: si el caído es el persister, la detección continúa y solo se retrasa el archivo; si es el notifier, la detección continúa pero nadie registra a qué organismo se avisó; si es el ingestor o el correlator, **la ciudad ha dejado de detectar incidentes** y es
 la máxima prioridad. Esa jerarquía es consecuencia directa de
 [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube).
 
@@ -2616,7 +2782,7 @@ ingestor, se adjunta como cabecera del mensaje de Kafka y el correlator lo
 recupera y lo emite en sus propios registros.
 
 Resultado: un solo identificador permite reconstruir el recorrido completo de
-un evento a través de los cinco servicios. Es el 80 % del valor de una
+un evento a través de los servicios. Es el 80 % del valor de una
 trazabilidad distribuida al 5 % de su costo operativo.
 
 ### 3.5.1 Dónde vive la observabilidad, y por qué no en la nube
@@ -2718,6 +2884,16 @@ Prometheus con datos reales.
 - **Falta el canal de notificación.** Las reglas disparan dentro de Prometheus,
   pero **no hay Alertmanager configurado** para enviarlas a un correo o un
   teléfono. Está identificado como trabajo pendiente.
+
+  Conviene no confundirlo con lo que resuelve
+  [ADR-011](#adr-011-aviso-a-terceros-servicio-propio-con-registro-de-despacho). Son dos canales distintos y ninguno
+  sustituye al otro: aquel avisa a **los cuerpos de respuesta** de que hay un
+  incendio en la zona 12; este avisaría al **equipo que opera el sistema** de
+  que el propio sistema está fallando. El segundo sigue pendiente.
+- **No hay un objetivo de nivel de servicio para el aviso.** El notifier mide
+  `notifier_retraso_aviso_seconds` (de la creación de la alerta al aviso), pero no
+  se fijó un umbral ni una regla de alerta sobre él. Es el siguiente SLO natural
+  ahora que existe el servicio.
 - **Instrumentar es trabajo recurrente.** Cada funcionalidad nueva debería
   añadir sus métricas, y eso se olvida con facilidad.
 
@@ -2771,13 +2947,14 @@ en estado `err` ni con expresión que no encuentre serie.
 
 ### Tableros
 
-Tres tableros provisionados con **30 paneles**. Se comprobó enviando a sus
+Cuatro tableros provisionados con **42 paneles**. Se comprobó enviando a sus
 respectivos motores el texto exacto de cada consulta generada:
 
 | Comprobación | Resultado |
 |---|---|
 | Expresiones PromQL de paneles y reglas | 45 comprobadas, 0 rechazadas |
-| Consultas SQL de los paneles | 11 comprobadas, 0 con error |
+| Consultas SQL del tablero de incidentes | 11 comprobadas, 0 con error |
+| Paneles del tablero de trazabilidad | 11 de 11 con datos, sobre un incidente de la simulación (`./make.sh verificar`, 21 de octubre) |
 | Orígenes de datos provisionados | Prometheus, PostgreSQL y Elasticsearch, los tres con conexión correcta |
 
 Esa comprobación encontró dos defectos que ninguna validación de sintaxis
@@ -2917,8 +3094,12 @@ pueden disolver: dependen del calendario, no de la llegada de un evento.
 | Indexación en Elasticsearch | — | Ninguna: la resuelve un consumidor (sección 3.2) |
 | Limpieza de claves en Redis | **Ninguna** | Los TTL lo resuelven solos |
 | Chequeos de salud | **Ninguna** | [ADR-008](#adr-008-observabilidad-y-objetivos-de-nivel-de-servicio) |
+| Recorridos por calle de las alertas | Cada minuto | [ADR-012](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde) (posterior a esta decisión) |
 
-**El trabajo periódico real son dos tareas nocturnas.** De ahí que la pregunta
+**El trabajo periódico real eran dos tareas nocturnas.** Desde el
+[ADR-012](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde) hay una tercera, de otra naturaleza: no cierra
+un día, acompaña al flujo y corre cada minuto. Tres tareas siguen sin ser un caso
+para Airflow, y el argumento de esta sección se mantiene. De ahí que la pregunta
 deje de ser "¿conviene Airflow para gobernar el trabajo periódico?" y pase a
 ser **"¿conviene Airflow para dos tareas que corren de madrugada?"**.
 
@@ -3012,8 +3193,7 @@ La pregunta del enunciado tiene una respuesta corta: **no, no se justifica.**
 
 Airflow resuelve problemas reales —grafos de dependencias, *backfill*,
 reintentos con política, visibilidad para equipos de datos— y ninguno de esos
-problemas existe aquí. Dos tareas nocturnas independientes entre sí no forman un
-grafo. No hay histórico que rellenar. No hay un equipo de datos.
+problemas existe aquí. Tres tareas independientes entre sí no forman un grafo. No hay histórico que rellenar. No hay un equipo de datos.
 
 Adoptar una herramienta por lo que podría necesitarse algún día tiene un costo
 que se paga todos los días, y lo paga un equipo municipal reducido que no tiene
@@ -3045,7 +3225,7 @@ Ventajas sobre la copia periódica:
   indexación continúa.
 - Reutiliza el patrón ya construido y probado.
 
-Con eso, **el planificador queda con dos tareas nocturnas**, y sostener Airflow
+Con eso, **el planificador queda con dos tareas nocturnas** (hoy son tres, ver 3.3), y sostener Airflow
 para eso resulta indefendible.
 
 ### 3.3 Lo que hará el servicio de tareas
@@ -3053,12 +3233,19 @@ para eso resulta indefendible.
 | Tarea | Horario | Descripción |
 |---|---|---|
 | **Agregados diarios** | Diaria, 03:00 | Calcula recuentos por zona y tipo del día anterior y los guarda en tablas de resumen |
-| **Retención** | Diaria, 03:30 | Aplica la política de [ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube): elimina el seudónimo de placa a los 90 días, las coordenadas al año, y borra el evento a los dos, dejando solo el agregado |
+| **Retención** | Diaria, 03:30 | Aplica la política de [ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube): elimina el seudónimo de placa a los 90 días, las coordenadas al año, y borra el evento a los dos, dejando solo el agregado. Desde el 2026-10-21 también borra los recorridos guardados (365 días) y los avisos (730 días): [ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube) §4.3 |
+| **Recorridos de alertas** | Cada minuto | Calcula con OSRM el recorrido de las alertas con botón de pánico y un solo vehículo y lo recalcula cuando el rastro crece ([ADR-012](#adr-012-recorridos-por-calle-osrm-en-la-capa-de-borde)) |
 
 El orden no es arbitrario: **los agregados corren antes que la retención**. Si
 la purga borrara los eventos primero, el resumen del día saldría incompleto, y
 esa pérdida sería irreversible porque el agregado es justamente lo que
 sobrevive al borrado.
+
+**Actualización (2026-10-14):** el planificador solo sabía de tareas diarias a hora
+fija y se extendió con tareas **por intervalo**. El cerrojo cambia de forma: el de
+las diarias lleva la fecha y dura casi un día; el de las de intervalo lleva el
+número de ventana y dura lo que el intervalo. No hay todavía pruebas automáticas
+de las tareas por intervalo: las 10 del planificador cubren las diarias.
 
 Ambas se ejecutarán con **bloqueo distribuido en Redis** (`SET NX` con TTL),
 para que dos instancias del servicio no ejecuten la misma purga a la vez. Es el
@@ -3091,13 +3278,12 @@ necesariamente Airflow: existen orquestadores más ligeros con interfaz web.
 
 ### 3.5 Estado de implementación
 
-**El `indexer` está construido y verificado.** El servicio `jobs` con las dos
-tareas nocturnas sigue pendiente.
+**El `indexer` y el servicio `jobs` están construidos y verificados.**
 
 | Componente | Estado |
 |---|---|
 | Servicio `indexer` (Kafka → Elasticsearch) | **Listo y verificado** |
-| Servicio `jobs` con las dos tareas nocturnas | **Listo y verificado** |
+| Servicio `jobs` con las dos tareas nocturnas y la de recorridos | **Listo y verificado** |
 | Tablas de agregados y política de retención en SQL | **Listo y verificado** |
 
 #### Verificación del servicio de tareas
@@ -3124,7 +3310,7 @@ verificó con tres eventos sintéticos de distinta antigüedad:
 Los 3 334 eventos del día quedaron intactos, con sus 728 placas. La purga no
 tocó nada que estuviera dentro de plazo.
 
-**El planificador está probado**: 12 pruebas automáticas, incluidas las del
+**El planificador está probado**: 10 pruebas automáticas, incluidas las del
 cerrojo contra un Redis real. Cubren que la tarea corra una sola vez al día
 aunque se revise el minuto varias veces, que un fallo libere el cerrojo para
 poder reintentar el mismo día, que no corra fuera de su hora, y que una zona
@@ -3219,7 +3405,7 @@ mucho más pequeño.
 
 Airflow es una herramienta potente pensada para organizaciones que ejecutan
 decenas o cientos de procesos automáticos con dependencias entre sí. Este
-sistema necesita **dos tareas, una vez al día**.
+sistema necesita **tres tareas: dos una vez al día y una cada minuto**.
 
 Instalarla exigiría tres programas adicionales funcionando de forma permanente
 —incluido uno con su propia base de datos— que en conjunto consumirían más
@@ -3252,8 +3438,8 @@ en el documento técnico cuándo hacerlo.
 
 ### Estado
 
-**Construido y verificado.** Las dos tareas nocturnas y el proceso de búsqueda
-funcionan, y se comprobaron con datos reales del sistema en ejecución.
+**Construido y verificado.** Las dos tareas nocturnas, la de recorridos y el proceso
+de búsqueda funcionan, y se comprobaron con datos reales del sistema en ejecución.
 
 ### Riesgo
 
@@ -3275,7 +3461,7 @@ funcionan, y se comprobaron con datos reales del sistema en ejecución.
   la tarea periódica principal.
 - [ADR-008](#adr-008-observabilidad-y-objetivos-de-nivel-de-servicio) — sustituye por completo al DAG de
   chequeos de salud.
-- `services/jobs/` — implementación del planificador y las dos tareas.
+- `services/jobs/` — implementación del planificador y las tres tareas.
 
 ---
 
@@ -3290,8 +3476,9 @@ funcionan, y se comprobaron con datos reales del sistema en ejecución.
 
 ## 1. Contexto
 
-El sistema son cinco servicios propios más seis componentes de infraestructura
-—Kafka, Redis, PostgreSQL, Elasticsearch, Prometheus y Grafana— repartidos en
+El sistema son seis servicios propios más siete componentes de infraestructura
+(Kafka, Redis, PostgreSQL, Elasticsearch, Prometheus, Grafana y el motor de rutas
+OSRM) repartidos en
 dos capas por el corte híbrido del
 [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube). Hay que decidir cómo se empaquetan
 y cómo se ponen en marcha.
@@ -3318,7 +3505,7 @@ no hace falta, porque está medida:
 | Respuestas fuera de `202` | ninguna |
 | Latencia p99 bajo ráfaga | 19,7 ms |
 | Instancias necesarias para absorberla | **una de cada servicio** |
-| Memoria residente por servicio | 15 – 19 MB |
+| Memoria residente por servicio | 13 – 18 MB |
 | Arranque de un servicio | 7 – 50 ms |
 
 Es un dato que condiciona todo lo demás: **el escalado horizontal automático,
@@ -3442,30 +3629,33 @@ una vez al mes.
 
 | Archivo | Dónde corre | Qué contiene |
 |---|---|---|
-| `docker-compose.edge.yml` | LAN municipal | Kafka (KRaft), Redis, los cinco microservicios, Prometheus, Grafana, Kafka-UI |
+| `docker-compose.edge.yml` | LAN municipal | Kafka (KRaft) y su inicializador, Redis, los seis microservicios, el motor de rutas OSRM, Prometheus, Grafana, Kafka-UI |
 | `docker-compose.cloud.yml` | Nube | Elasticsearch, Kibana |
-| `docker-compose.dev.yml` | Máquina del desarrollador | PostgreSQL local, en lugar de la base gestionada |
+| `docker-compose.dev.yml` | Máquina del desarrollador | PostgreSQL local, en lugar de la base gestionada, y `postgres-migrate`, que aplica el esquema en cada arranque |
 
 Que el corte del [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube) coincida con la
 frontera entre dos archivos no es cosmético: hace que la pregunta *"¿qué pasa
 si se cae el enlace?"* se responda leyendo cuál de los dos sigue arriba.
 
-Los servicios que cruzan la frontera —persister e indexer— **corren en la capa
-`edge`** aunque escriban en la nube. Es deliberado: así la lectura de Kafka es
+Los servicios que cruzan la frontera (persister, indexer, notifier y jobs)
+**corren en la capa `edge`** aunque escriban en la nube. Es deliberado: así la lectura de Kafka es
 local y solo la escritura, ya por lotes, viaja por el enlace.
 
 ### 3.3 Qué aporta Compose que es suficiente
 
 | Mecanismo | Uso en el proyecto | Qué cubre |
 |---|---|---|
-| `restart: unless-stopped` | 8 servicios en `edge`, 4 en `cloud` | Un proceso que muere vuelve solo; sobrevive al reinicio del servidor |
-| `healthcheck` | 7 servicios en `edge` | Distingue *arrancado* de *listo*, que no es lo mismo en Kafka ni en Elasticsearch |
-| `depends_on: condition: service_healthy` | 9 dependencias | Arranque ordenado: el ingestor no arranca antes que Kafka esté listo |
+| `restart: unless-stopped` | 12 servicios en `edge`, 2 en `cloud`, 1 en `dev` | Un proceso que muere vuelve solo; sobrevive al reinicio del servidor |
+| `healthcheck` | 9 servicios en `edge`, 1 en `cloud`, 1 en `dev` | Distingue *arrancado* de *listo*, que no es lo mismo en Kafka ni en Elasticsearch |
+| `depends_on: condition: service_healthy` | 12 dependencias | Arranque ordenado: el ingestor no arranca antes que Kafka esté listo |
+| `depends_on: condition: service_completed_successfully` | 9 dependencias | Espera a procesos de un solo uso: los topics de Kafka (`kafka-init`) y el esquema de la base (`postgres-migrate`) |
 
 La tercera fila resuelve un problema concreto y muy visible en una demostración
 en vivo: sin ella, los servicios arrancan a la vez, fallan al conectar y
 dependen de que el reinicio los salve. Con ella, el sistema sube en orden a la
-primera.
+primera. La espera a `kafka-init` no es un detalle: sin ella, un consumidor que se
+une antes de que exista su topic queda sin particiones y sin error
+([ADR-004](#adr-004-broker-de-eventos-kafka-en-modo-kraft)).
 
 ### 3.4 Las imágenes
 
@@ -3484,14 +3674,14 @@ justamente la disciplina que sostiene el
 
 Es lo que permite descartar Kubernetes sin descartarlo para siempre.
 
-Los cinco servicios ya cumplen lo que Kubernetes espera de una aplicación:
+Los seis servicios ya cumplen lo que Kubernetes espera de una aplicación:
 
 | Propiedad | Estado hoy | Qué sería en Kubernetes |
 |---|---|---|
 | Sin estado en el proceso | Sí; el estado vive en Redis, Kafka y PostgreSQL | `Deployment` sin volúmenes |
 | Configuración por variables de entorno | Sí, sin archivos de configuración | `ConfigMap` y `Secret` |
-| Endpoint de salud | `/health` en los cinco | Sondas de vitalidad y disponibilidad |
-| Métricas expuestas | `/metrics` en los cinco | Escrapeo por anotación |
+| Endpoint de salud | `/health` en los seis | Sondas de vitalidad y disponibilidad |
+| Métricas expuestas | `/metrics` en los seis | Escrapeo por anotación |
 | Cierre ordenado ante señal | Sí, con confirmación de offsets pendientes | `terminationGracePeriodSeconds` |
 | Imagen mínima | 22 – 29 MB, distroless | Imagen de contenedor |
 
@@ -3618,3 +3808,534 @@ dispararían esa revisión están escritos en el apartado 3.6.
 - `deploy/README.md` — procedimiento de puesta en marcha.
 
 ---
+
+# ADR-011: Aviso a terceros — servicio propio con registro de despacho
+
+**Estado:** aceptado
+**Fecha:** 2026-10-03
+**Decide:** equipo de arquitectura
+**Relacionado con:** [ADR-004](#adr-004-broker-de-eventos-kafka-en-modo-kraft) (el aviso se dispara desde `correlated.alerts`), [ADR-005](#adr-005-persistencia-postgresql-relacional-con-elasticsearch-para-búsqueda) (el registro vive en PostgreSQL), [ADR-006](#adr-006-resiliencia-y-tolerancia-a-fallos) (idempotencia ante reentrega), [ADR-008](#adr-008-observabilidad-y-objetivos-de-nivel-de-servicio) (canal de aviso: son dos huecos distintos, no el mismo)
+
+---
+
+## 1. Contexto
+
+Hasta ahora el sistema respondía "qué ocurrió" y no respondía "a quién se le
+dijo". Una alerta de incendio y una alerta de incendio atendida eran el mismo
+registro en la base: `alerts` guarda el hecho detectado y nada más.
+
+Esa carencia estaba identificada. El [ADR-008](#adr-008-observabilidad-y-objetivos-de-nivel-de-servicio)
+la registra como trabajo pendiente —*"las reglas disparan dentro de Prometheus,
+pero no hay Alertmanager configurado"*— y el informe final situaba la
+integración con sistemas de despacho de emergencias fuera del alcance. Son dos
+huecos distintos: aquel es el aviso al equipo que opera el sistema; este es el
+aviso al cuerpo que acude al incidente.
+
+El requisito nuevo es el segundo: dado un incendio detectado en la zona 12,
+poder responder a quién se avisó, por qué canal, cuándo y con qué resultado. Y
+poder responderlo meses después, ante una reclamación.
+
+### Lo que hace que esto no sea un campo más
+
+La tentación inmediata es añadir un campo `avisados` a la alerta. Tres hechos
+lo impiden, y conviene enumerarlos porque son los que determinan la decisión:
+
+1. **El contrato de la alerta está cerrado.**
+   `contracts/correlated-alert/v1.0/schema.json` declara
+   `additionalProperties: false`. Un campo nuevo obliga a versionar el
+   contrato y a resincronizar sus copias embebidas en cuatro servicios.
+
+2. **El mapeo de Elasticsearch es estricto.**
+   `plantillas/alerts.json` usa `"dynamic": "strict"`: un campo no declarado no
+   se ignora, hace fallar la indexación del documento entero.
+
+3. **La relación es uno a muchos y tiene estado.**
+   Un incendio avisa a bomberos y a ambulancia. Cada aviso se crea, se intenta,
+   puede fallar y se reintenta. La alerta, en cambio, es un hecho inmutable:
+   ocurrió, y no cambia. Meter un ciclo de vida dentro de un hecho obliga a
+   reescribir el hecho cada vez que cambia el ciclo.
+
+---
+
+## 2. Opciones consideradas
+
+### Opción A — Una vista derivada, sin componente nuevo
+
+Una tabla de equivalencias (tipo de alerta → organismos) que el tablero cruza
+con `alerts`. Cero servicios nuevos, cero latencia añadida, una tarde de
+trabajo.
+
+Se descartó por lo que **no** puede responder. Una vista derivada dice a quién
+*habría que* avisar; no dice si se avisó. No distingue "no se pudo entregar" de
+"no se intentó", que es justamente la distinción que necesita una investigación
+posterior. Y si mañana se cambia el criterio de despacho, la vista reescribe el
+pasado: las alertas de hace un mes aparecerían con los destinatarios de hoy.
+
+Para una demostración habría bastado. Para un registro, no.
+
+### Opción B — El persister deriva y escribe los avisos
+
+Sin servicio nuevo: al archivar una alerta, el persister escribe también las
+filas de aviso. Hay registros reales y el coste de infraestructura es nulo.
+
+Se descartó por responsabilidad y por acoplamiento. El trabajo del persister es
+archivar lo que ya ocurrió; decidir a quién se avisa es una decisión operativa,
+no un archivo. Mezclarlas significa que un cambio en el criterio de despacho
+obliga a desplegar el servicio del que depende el historial completo. Además el
+persister acumula en lotes de hasta cien mensajes con dos segundos de espera,
+que es lo correcto para archivar y lo contrario de lo que conviene a un aviso.
+
+### Opción C — Servicio `notifier` propio
+
+Un sexto microservicio que consume `correlated.alerts`, aplica una matriz de
+despacho y registra cada aviso en una tabla nueva.
+
+Cuesta un servicio más que mantener, desplegar y vigilar.
+
+---
+
+## 3. Decisión
+
+**Opción C: un servicio `notifier` independiente, con su propia tabla.**
+
+### 3.1 El argumento, en una línea
+
+Un aviso no es un dato derivado de la alerta: es un acto con consecuencias
+fuera del sistema, y los actos se registran cuando ocurren, no se recalculan
+después.
+
+### 3.2 Qué hace
+
+Consume `correlated.alerts` con grupo propio, valida contra el contrato,
+consulta la matriz de despacho, entrega por el canal configurado y escribe una
+fila por organismo en `notifications`.
+
+| Tipo de alerta | Organismos |
+|---|---|
+| `fire` | bomberos, ambulancia |
+| `accident` | ambulancia, policía, tránsito |
+| `possible_robbery` | policía |
+| `traffic_speed_violation` | tránsito |
+| `vehicle_pursuit` | policía, tránsito |
+
+El criterio es deliberadamente generoso en incendio y accidente: el coste de
+movilizar una ambulancia que no hacía falta es muy inferior al de no
+movilizarla. En las infracciones de tránsito ocurre lo contrario, y por eso
+solo interviene tránsito.
+
+La matriz se puede ajustar por entorno (`DISPATCH_FIRE=bomberos,ambulancia`)
+sin recompilar, y el servicio registra al arrancar cuál está aplicando: un
+cambio por variable de entorno no deja rastro en el repositorio, y sin ese
+registro nadie podría explicar después por qué no se avisó a los bomberos.
+
+### 3.3 La idempotencia vive en la base, no en el código
+
+```sql
+CONSTRAINT notifications_alerta_organismo UNIQUE (alert_id, organismo)
+```
+
+Kafka reentrega tras un rebalanceo o un reinicio. Comprobar en el código si el
+aviso ya existe y después escribirlo deja una ventana de carrera por la que dos
+instancias avisarían dos veces del mismo incendio. `ON CONFLICT DO NOTHING`
+resuelve la carrera dentro de la base, en una sola operación atómica.
+
+Verificado: rebobinar el grupo de consumo al principio del topic y reprocesar
+las 1 789 alertas no añadió ninguna fila, y el servicio contabilizó 1 789
+duplicados.
+
+### 3.4 No se consume desde el principio del topic
+
+`KAFKA_CONSUME_FROM_START=false`, al revés que en el persister. La diferencia
+es intencionada: un grupo de consumo nuevo que arrancara desde el origen
+despacharía avisos de todas las alertas históricas —bomberos a un incendio de
+la semana pasada—. La restricción `UNIQUE` lo impediría en la práctica, pero
+confiar a ella el no despachar emergencias viejas sería dejar la corrección al
+azar del orden de los acontecimientos.
+
+### 3.5 La entrega está simulada, y hay que decirlo
+
+El canal por defecto es `simulado`: registra la fila y escribe en el log. **No
+existe integración con bomberos, policía ni ambulancias. Nadie acude.**
+
+Describirlo de otra forma sería presentar como funcionalidad algo que no lo es.
+El servicio documenta la decisión de despacho y deja la trazabilidad completa,
+que es lo que el requisito pedía; la entrega real exige convenios con cada
+cuerpo de respuesta, que no es una decisión de arquitectura.
+
+El punto de extensión queda marcado y es demostrable, no hipotético: la
+interfaz `Canal` tiene una segunda implementación, `webhook`, que entrega por
+HTTP a una URL configurable. Apuntándola a un receptor de pruebas se recorre el
+camino completo, incluido el registro de un fallo de entrega.
+
+### 3.6 La métrica que importa
+
+`notifier_alertas_sin_destinatario_total{tipo}`.
+
+Un tipo de alerta sin fila en la matriz no produce ningún error: el sistema
+sigue funcionando y sencillamente no avisa a nadie. Es el fallo más caro
+posible en este servicio y el único que no se manifiesta solo. Por eso además
+se grita al arrancar, que es el momento en que alguien está mirando, y el
+tablero de trazabilidad lleva un recuadro de "alertas sin ningún aviso" que
+debería ser siempre cero.
+
+---
+
+## 4. Consecuencias
+
+### Positivas
+
+- Se puede responder, meses después, a quién se avisó de un incidente, cuándo
+  y con qué resultado.
+- Cambiar el criterio de despacho no reescribe el pasado: los avisos ya
+  emitidos conservan el organismo que recibió cada uno.
+- Un fallo de entrega queda registrado como tal, distinguible de un aviso que
+  nunca se intentó.
+- El contrato de la alerta no se toca, de modo que los consumidores existentes
+  no se enteran del cambio.
+
+### Negativas aceptadas
+
+- **Un servicio más.** Seis en lugar de cinco: una imagen más que construir, un
+  objetivo más que vigilar en Prometheus, un proceso más que puede caerse.
+- **La entrega es «al menos una vez» y el registro no la protege.** El servicio
+  entrega por el canal y después escribe la fila. Si la escritura falla por una causa
+  transitoria (por ejemplo, la base no responde durante un corte del enlace), no se
+  confirma el offset y la alerta se reprocesa: se vuelve a entregar, y el `UNIQUE`
+  solo evita la fila duplicada, no el aviso duplicado. Con el canal simulado es
+  inocuo. Con un canal real, un cuerpo de respuesta podría recibir el mismo aviso
+  varias veces. La corrección es registrar el aviso como `pendiente` antes de
+  entregar y actualizarlo después (el patrón outbox), y debe hacerse antes de
+  conectar un canal real.
+- **La entrega no es real.** El sistema sabe a quién habría que avisar y lo
+  registra; no hay nadie al otro lado. Es la limitación principal y no se
+  disimula en ningún tablero.
+- **No hay reintento automático.** Un aviso fallido queda en estado `fallido` y
+  ahí se queda. Reintentarlo exige una política —cuántas veces, con qué
+  espera, hasta cuándo— que depende de cada cuerpo de respuesta y que no tiene
+  sentido inventar antes de que exista el convenio.
+- **No hay acuse de recibo.** La tabla no tiene columna para él, porque ningún
+  organismo responde todavía. Sí existen `intentos` y `enviado_en`.
+
+---
+
+## 5. Impacto en el negocio
+
+### Qué se decidió
+
+Que cada aviso a un cuerpo de respuesta quede registrado como un hecho propio,
+con su destinatario, su canal, su hora y su resultado.
+
+### Por qué
+
+Porque un sistema que detecta incidentes pero no puede demostrar que avisó es
+indefendible ante una reclamación. Si un vecino pregunta por qué los bomberos
+no llegaron, la Municipalidad necesita poder responder si el sistema avisó, a
+qué hora, y si la entrega falló. Sin este registro, la respuesta sería "el
+sistema detectó el incendio", que no es la pregunta.
+
+### Qué se pierde, dicho con claridad
+
+El sistema **no llama a los bomberos**. Decide a quién habría que llamar, lo
+anota y lo muestra. Conectar esa decisión con el teléfono de una central de
+emergencias requiere un convenio con cada cuerpo, un protocolo acordado y una
+certificación de disponibilidad que no se improvisan.
+
+### Costo
+
+Cero costo adicional de licencias o servicios. El servicio comparte la base de
+datos y el broker que ya existen; su consumo es despreciable porque las alertas
+son órdenes de magnitud menos numerosas que los eventos.
+
+### Si el sistema crece
+
+La tabla `notifications` se purga a los dos años, con el evento que la originó
+([ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube) §4.3), y crece con las alertas, no con los eventos: a razón de
+dos o tres filas por alerta, su volumen es irrelevante frente a `events`.
+Cuando exista integración real, el reintento tiene ya su columna (`intentos`) y falta el bucle; el acuse
+necesitará una columna nueva.
+
+---
+
+## Referencias
+
+- `services/notifier/` — implementación completa
+- `deploy/sql/002_trazabilidad.sql` — tabla `notifications` y sus restricciones
+- `deploy/grafana/provisioning/dashboards/04-trazabilidad.json` — tablero
+- [ADR-008](#adr-008-observabilidad-y-objetivos-de-nivel-de-servicio) §"Lo que falta" — el otro canal, el del equipo que opera el sistema, que sigue pendiente
+
+---
+
+# ADR-012: Recorridos por calle — OSRM en la capa de borde
+
+**Estado:** aceptado
+**Fecha:** 2026-10-07
+**Decide:** equipo de arquitectura
+**Relacionado con:** [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube) (por qué el motor vive en la LAN), [ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube) (las coordenadas son dato personal), [ADR-009](#adr-009-orquestación-de-tareas-periódicas-retirar-airflow) (quién calcula y cuándo)
+
+---
+
+## 1. Contexto
+
+El mapa de incidentes unía los puntos donde una cámara vio un vehículo con
+líneas rectas, que cortan por encima de las manzanas. La petición es que el
+recorrido siga las calles, como una ruta de navegador.
+
+Antes de resolverlo técnicamente hay que decir qué se está dibujando, porque
+determina el resto de la decisión:
+
+> **El sistema no sabe por dónde circuló el vehículo.** Sabe que una cámara lo
+> captó en tres puntos. Cualquier línea entre ellos —recta o por calles— es una
+> interpolación.
+
+La diferencia es que la recta *se nota* que es una simplificación, y la ruta por
+calles no: parece un recorrido medido. Esa es la contrapartida real de esta
+decisión y conviene que figure por escrito.
+
+## 2. Opciones consideradas
+
+### Opción A — Dejar la línea recta
+
+Cero coste. Y una virtud que se pierde al cambiar: nadie confunde una recta
+que atraviesa seis manzanas con el camino que tomó un coche.
+
+Se descartó porque no responde a la pregunta operativa. Un agente que mira el
+mapa necesita saber por qué calles pudo escapar el vehículo para decidir dónde
+interceptarlo, y una recta no se lo dice.
+
+### Opción B — API externa de rutas
+
+Un servicio como OpenRouteService o el OSRM público. Se monta en una tarde.
+
+Se descartó por dos razones, y la segunda pesa más que la primera.
+
+La primera es de disponibilidad: el [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube)
+sostiene que la detección no depende del enlace a internet, y buena parte de la
+defensa del diseño híbrido descansa en eso. Un mapa que deja de funcionar
+cuando se cae la conexión contradice el argumento.
+
+La segunda es de privacidad. Pedir una ruta significa **enviar a un tercero las
+coordenadas exactas y la hora de un incidente de seguridad ciudadana**. El
+[ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube) se toma el trabajo de que la
+placa no cruce a la nube sin seudonimizar; mandar las ubicaciones a un servicio
+externo por comodidad habría vaciado ese esfuerzo por otro lado.
+
+### Opción C — OSRM en la capa de borde
+
+Un contenedor con el mapa de Guatemala de OpenStreetMap, preprocesado una vez.
+Calcula rutas reales sin salir de la red municipal.
+
+Cuesta un contenedor más, 131 MB de descarga inicial y unos minutos de
+preprocesado.
+
+## 3. Decisión
+
+**Opción C.** El motor de rutas vive en la LAN, junto al correlator.
+
+### 3.1 Los datos se preparan aparte del arranque
+
+`./make.sh rutas-preparar` descarga el mapa y construye los índices. **No** es
+parte de `up`.
+
+Meterlo en el arranque habría significado que levantar el sistema para una
+demostración depende de poder descargar 131 MB, y que un volumen recreado
+obliga a esperar varios minutos antes de ver nada. Los datos viven en
+`deploy/osrm-data`, que está en `.gitignore`: un mapa de OpenStreetMap no se
+versiona, se descarga.
+
+Se usa el algoritmo MLD y no CH porque permite recalcular los pesos sin rehacer
+el índice entero, que es lo que haría falta el día que se quisieran incorporar
+cortes de calle o tráfico.
+
+### 3.2 Calcula `jobs`, no el correlator
+
+Pedir una ruta es una llamada HTTP a un motor externo. Ponerla en el camino
+crítico de la detección significaría que **un fallo del motor de rutas retrasa
+la emisión de una alerta de incendio**. El recorrido es presentación; la alerta
+es la función del sistema.
+
+Por eso lo calcula una tarea periódica. Eso obligó a extender el planificador
+del [ADR-009](#adr-009-orquestación-de-tareas-periódicas-retirar-airflow), que solo sabía de
+tareas diarias a hora fija, con tareas **por intervalo**. La distinción no es
+caprichosa: una tarea diaria cierra el día, una tarea por intervalo acompaña al
+flujo. Calcular a las tres de la madrugada el recorrido de un incidente de media
+tarde no le sirve a nadie, porque el operador ya miró el mapa y lo vio vacío.
+
+El cerrojo también cambia de forma. El de las tareas diarias lleva la fecha y
+dura casi un día, para que la purga corra una sola vez. El de las tareas por
+intervalo lleva el **número de ventana** y dura lo que el intervalo, de modo
+que el propio cerrojo marca el ritmo: el planificador consulta cada minuto y
+solo entra quien toma la ventana. Sin eso habría que guardar en memoria la
+última ejecución, que se pierde en cada reinicio y no sirve con varias
+instancias.
+
+### 3.3 Se guarda el resultado, incluidos los fracasos
+
+La tabla `alert_routes` registra tres estados: `calculada`, `sin_ruta` y
+`fallida`.
+
+Guardar solo los éxitos habría hecho que la tarea reintentara lo mismo cada
+minuto para siempre, y nadie podría distinguir una alerta cuyo recorrido aún no
+se ha calculado de otra para la que no existe. `sin_ruta` no se reintenta
+—ese resultado no va a cambiar—; `fallida` sí, hasta tres veces, porque el
+fallo típico es que el motor estaba arrancando.
+
+La geometría se guarda como un array JSON de pares `[lon, lat]` en **una sola
+fila por alerta**, no una fila por vértice. Un recorrido urbano tiene cientos de
+vértices y desgranarlos multiplicaría el tamaño de la tabla sin que nadie
+consulte jamás un vértice suelto: siempre se lee la ruta entera.
+
+### 3.3 bis El recorrido cubre el rastro completo, y se recalcula
+
+La alerta se emite en cuanto el patrón se completa, y el vehículo sigue
+circulando después. Una ruta calculada una sola vez, al nacer la alerta,
+terminaría en la última evidencia y no en el último contacto, que es justo lo
+que interesa: por dónde fue y dónde se le perdió la pista.
+
+Por eso el recorrido pasa por **las evidencias y por el rastro posterior del
+vehículo**, que termina cuando entre dos apariciones pasan más de 30 minutos
+(`RUTAS_SILENCIO_MIN`). Es una política y no una medida: si un coche reaparece
+pasado ese plazo, eso ya no es la misma huida. El tablero usa el mismo valor
+escrito en su propia consulta, de modo que si se cambia en uno hay que cambiarlo
+en el otro.
+
+La ventana de correlación (15 minutos) y el rastro (hasta 30 de silencio) son
+cosas distintas y no deben confundirse. La ventana es de **detección**: tiene
+que ser corta, porque una alerta de robo que llega media hora tarde no sirve. El
+rastro es de **reconstrucción**: se hace sobre el archivo y no tiene por qué
+heredar ese límite.
+
+`alert_routes` guarda con qué se calculó cada ruta —cuántos puntos y qué
+intervalo abarcan—, y la tarea la rehace cuando el rastro tiene más puntos que
+ella. Sin eso la línea se quedaría atrás conforme el vehículo sigue apareciendo
+en cámaras. El contador de intentos solo sube cuando el cálculo *falla*: si
+subiera con cada recálculo correcto, una ruta que se ha ido alargando acabaría
+con los intentos agotados y, si el siguiente fallara, no se reintentaría nunca.
+
+Lo que el sistema no puede decir es **por qué** se perdió el contacto: si el
+vehículo se detuvo, salió de la ciudad o sencillamente dejó de haber cámaras.
+Distinguirlo exigiría un inventario de cobertura de sensores que no existe.
+
+### 3.3 ter Cuándo se traza un recorrido, y cuándo no
+
+Un recorrido es la trayectoria de **un** vehículo que se aleja de un hecho. Solo
+se calcula si la alerta incluye un botón de pánico y exactamente un vehículo
+identificado. En los demás casos la fila de `alert_routes` queda en `sin_ruta`
+con un detalle que dice «no aplica».
+
+La primera versión calculaba una ruta para toda alerta, y la verificación de
+extremo a extremo lo cazó: en un incendio las evidencias son un reporte y un
+sensor acústico en el mismo instante, y en un exceso de velocidad son tres coches
+distintos. Unirlos con una ruta por calles dibuja una línea que nadie recorrió
+(«el recorrido estimado son 125 s y solo pasaron 0»). No se veía porque el tablero
+solo enseña rutas de incidentes con pulsador, pero estaban en la base.
+
+Se deja la fila explícita en lugar de omitir la alerta: sin ella parecería tener
+el cálculo pendiente para siempre, y nadie distinguiría «todavía no» de «no
+aplica».
+
+Un pulsador que no generó ninguna alerta —el falso positivo del enunciado— sí
+aparece en el mapa, como un único punto INICIO. Un mapa vacío parece un fallo del
+tablero cuando es justo lo que hay que enseñar.
+
+### 3.3 quater Un tramo imposible no se dibuja
+
+Una cámara que lee mal un carácter de la placa produce, a veces, la matrícula de
+otro coche, y esa lectura aparece en el rastro de un vehículo al que no
+pertenece. Unirla con una ruta por calles dibuja un salto de varios kilómetros en
+segundos que ningún coche pudo hacer.
+
+El rastro se filtra por plausibilidad física antes de calcular la ruta: se
+descarta una lectura si la velocidad implícita desde la anterior supera
+`RUTAS_VEL_MAX_KMH` (70 km/h medidos en línea recta, con un margen de 0,3 km por el
+error de posición). El tablero aplica el mismo criterio en su consulta, de modo que
+si se cambia en un sitio hay que cambiarlo en el otro. El umbral se calibró con el
+propio motor de rutas: a flujo libre por las calles de la capital, la velocidad en
+línea recta salió entre 26 y 34 km/h. El correlator aplica la misma regla para no
+encadenar lecturas imposibles en una persecución
+([ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube), `docs/correlacion.md`).
+
+El recorrido parte del momento del pánico y recoge solo lo posterior: lo que el
+vehículo hiciera antes no es una huida de ese incidente.
+
+### 3.4 Qué se dibuja y qué no
+
+El panel superpone dos capas:
+
+| Capa | Qué es | Origen |
+|---|---|---|
+| Marcas | Los puntos donde una cámara vio el vehículo | `events.geo_lat/geo_lon` — **medido** |
+| Línea | El camino más probable entre esos puntos | `alert_routes.geometria` — **estimado** |
+
+La geometría guardada es ubicación, y por eso la retención la elimina a los 365
+días, el plazo de las coordenadas ([ADR-007](#adr-007-privacidad-seudonimización-de-placas-en-la-frontera-lannube)
+§4.3).
+
+La distinción está en el esquema, en la descripción del panel y en este documento. No está en el color de la línea: se decidió dibujarla como una ruta
+normal, sólida, porque es lo que hace legible el recorrido. Es una decisión
+consciente y tiene un riesgo asociado, que se enumera abajo.
+
+## 4. Consecuencias
+
+### Positivas
+
+- El recorrido de un incidente se lee como una ruta de navegador: se ve por
+  dónde pudo escapar el vehículo y hacia dónde iba.
+- Funciona sin internet, igual que la detección.
+- Las coordenadas de los incidentes no salen de la red municipal.
+- El planificador gana tareas por intervalo, que es una capacidad que faltaba
+  y que otras tareas podrán usar.
+
+### Negativas aceptadas
+
+- **La ruta es una hipótesis dibujada como un hecho.** El sistema no midió ese
+  camino. Si alguien pregunta en la defensa «¿cómo saben que fue por ahí?», la
+  respuesta honesta es: no lo sabemos, es el camino más probable entre tres
+  puntos que sí medimos. Mitigarlo visualmente —línea punteada, leyenda de
+  «estimado»— se consideró y se descartó a favor de la legibilidad.
+- **Un contenedor y 131 MB más.** El preprocesado tarda varios minutos y hay
+  que acordarse de ejecutarlo en una instalación nueva.
+- **El mapa envejece.** OpenStreetMap cambia; el extracto descargado no. Una
+  calle nueva no aparecerá hasta que alguien rehaga los índices.
+- **El contraste con el tiempo real es parcial.** La verificación compara la
+  duración que estima el motor con el tiempo transcurrido entre el primer y el
+  último punto, y falla si el trayecto no cabía. Lo hace sobre las rutas
+  calculadas, no al momento de emitir la alerta: el correlator todavía no
+  consulta el callejero: aplica solo el filtro de plausibilidad en línea recta de
+  la sección 3.3 quater, que es más permisivo que el tiempo por calle.
+
+## 5. Impacto en el negocio
+
+### Qué se decidió
+
+Que el recorrido de un incidente se dibuje siguiendo las calles, calculado
+dentro de la red municipal.
+
+### Por qué
+
+Porque un mapa con líneas rectas sirve para contar incidentes y no para
+perseguir uno. La diferencia entre «el vehículo fue visto en estos tres puntos»
+y «el vehículo pudo tomar esta ruta» es la diferencia entre un informe y una
+herramienta operativa.
+
+### Costo
+
+Ninguno recurrente. OpenStreetMap y OSRM son libres y el servicio corre sobre
+el mismo equipo que el resto de la capa de borde. El único coste es el tiempo
+de preparar los índices cuando se instala, y rehacerlos cuando se quiera un
+mapa actualizado.
+
+### Si el sistema crece
+
+El extracto de Guatemala entero ocupa poco y el motor responde en
+milisegundos. Si un día se quisieran incorporar cortes de calle o estado del
+tráfico, el algoritmo elegido (MLD) permite recalcular los pesos sin rehacer el
+índice.
+
+---
+
+## Referencias
+
+- `deploy/preparar-rutas.sh` — descarga y preprocesado
+- `deploy/sql/003_rutas.sql` — tabla `alert_routes`
+- `services/jobs/internal/rutas/osrm.go` — cliente del motor
+- `services/jobs/internal/scheduler/scheduler.go` — tareas por intervalo

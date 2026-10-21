@@ -170,6 +170,26 @@ Un pulsador que no generó ninguna alerta —el falso positivo del enunciado— 
 aparece en el mapa, como un único punto INICIO. Un mapa vacío parece un fallo del
 tablero cuando es justo lo que hay que enseñar.
 
+### 3.3 quater Un tramo imposible no se dibuja
+
+Una cámara que lee mal un carácter de la placa produce, a veces, la matrícula de
+otro coche, y esa lectura aparece en el rastro de un vehículo al que no
+pertenece. Unirla con una ruta por calles dibuja un salto de varios kilómetros en
+segundos que ningún coche pudo hacer.
+
+El rastro se filtra por plausibilidad física antes de calcular la ruta: se
+descarta una lectura si la velocidad implícita desde la anterior supera
+`RUTAS_VEL_MAX_KMH` (70 km/h medidos en línea recta, con un margen de 0,3 km por el
+error de posición). El tablero aplica el mismo criterio en su consulta, de modo que
+si se cambia en un sitio hay que cambiarlo en el otro. El umbral se calibró con el
+propio motor de rutas: a flujo libre por las calles de la capital, la velocidad en
+línea recta salió entre 26 y 34 km/h. El correlator aplica la misma regla para no
+encadenar lecturas imposibles en una persecución
+([ADR-007](007-privacidad-y-datos-personales.md), `docs/correlacion.md`).
+
+El recorrido parte del momento del pánico y recoge solo lo posterior: lo que el
+vehículo hiciera antes no es una huida de ese incidente.
+
 ### 3.4 Qué se dibuja y qué no
 
 El panel superpone dos capas:
@@ -179,8 +199,11 @@ El panel superpone dos capas:
 | Marcas | Los puntos donde una cámara vio el vehículo | `events.geo_lat/geo_lon` — **medido** |
 | Línea | El camino más probable entre esos puntos | `alert_routes.geometria` — **estimado** |
 
-La distinción está en el esquema, en la descripción del panel y en este
-documento. No está en el color de la línea: se decidió dibujarla como una ruta
+La geometría guardada es ubicación, y por eso la retención la elimina a los 365
+días, el plazo de las coordenadas ([ADR-007](007-privacidad-y-datos-personales.md)
+§4.3).
+
+La distinción está en el esquema, en la descripción del panel y en este documento. No está en el color de la línea: se decidió dibujarla como una ruta
 normal, sólida, porque es lo que hace legible el recorrido. Es una decisión
 consciente y tiene un riesgo asociado, que se enumera abajo.
 
@@ -210,7 +233,8 @@ consciente y tiene un riesgo asociado, que se enumera abajo.
   duración que estima el motor con el tiempo transcurrido entre el primer y el
   último punto, y falla si el trayecto no cabía. Lo hace sobre las rutas
   calculadas, no al momento de emitir la alerta: el correlator todavía no
-  consulta el callejero, solo mide la velocidad en línea recta.
+  consulta el callejero: aplica solo el filtro de plausibilidad en línea recta de
+  la sección 3.3 quater, que es más permisivo que el tiempo por calle.
 
 ## 5. Impacto en el negocio
 

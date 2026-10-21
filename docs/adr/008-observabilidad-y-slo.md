@@ -107,7 +107,7 @@ OpenTelemetry con un recolector y un backend de trazas.
 
 **En contra**
 
-- Complejidad operativa desproporcionada para cinco servicios y un equipo
+- Complejidad operativa desproporcionada para seis servicios y un equipo
   reducido.
 - Buena parte del beneficio se obtiene propagando el `trace_id` por registros y
   cabeceras de Kafka, que es mucho más barato.
@@ -186,9 +186,7 @@ Ejemplo, la del SLO 1:
 | `aviso` | Se consume presupuesto de error | En horario laboral |
 | `info` | Conviene saberlo | Revisión periódica |
 
-La regla `ServicioCaido` distingue en su propia acción: si el caído es el
-persister, la detección continúa y solo se retrasa el archivo; si es el
-ingestor o el correlator, **la ciudad ha dejado de detectar incidentes** y es
+La regla `ServicioCaido` distingue en su propia acción: si el caído es el persister, la detección continúa y solo se retrasa el archivo; si es el notifier, la detección continúa pero nadie registra a qué organismo se avisó; si es el ingestor o el correlator, **la ciudad ha dejado de detectar incidentes** y es
 la máxima prioridad. Esa jerarquía es consecuencia directa de
 [ADR-001](001-plataforma-de-despliegue.md).
 
@@ -229,7 +227,7 @@ ingestor, se adjunta como cabecera del mensaje de Kafka y el correlator lo
 recupera y lo emite en sus propios registros.
 
 Resultado: un solo identificador permite reconstruir el recorrido completo de
-un evento a través de los cinco servicios. Es el 80 % del valor de una
+un evento a través de los servicios. Es el 80 % del valor de una
 trazabilidad distribuida al 5 % de su costo operativo.
 
 ### 3.5.1 Dónde vive la observabilidad, y por qué no en la nube
@@ -337,6 +335,10 @@ Prometheus con datos reales.
   sustituye al otro: aquel avisa a **los cuerpos de respuesta** de que hay un
   incendio en la zona 12; este avisaría al **equipo que opera el sistema** de
   que el propio sistema está fallando. El segundo sigue pendiente.
+- **No hay un objetivo de nivel de servicio para el aviso.** El notifier mide
+  `notifier_retraso_aviso_seconds` (de la creación de la alerta al aviso), pero no
+  se fijó un umbral ni una regla de alerta sobre él. Es el siguiente SLO natural
+  ahora que existe el servicio.
 - **Instrumentar es trabajo recurrente.** Cada funcionalidad nueva debería
   añadir sus métricas, y eso se olvida con facilidad.
 
@@ -390,13 +392,14 @@ en estado `err` ni con expresión que no encuentre serie.
 
 ### Tableros
 
-Tres tableros provisionados con **30 paneles**. Se comprobó enviando a sus
+Cuatro tableros provisionados con **42 paneles**. Se comprobó enviando a sus
 respectivos motores el texto exacto de cada consulta generada:
 
 | Comprobación | Resultado |
 |---|---|
 | Expresiones PromQL de paneles y reglas | 45 comprobadas, 0 rechazadas |
-| Consultas SQL de los paneles | 11 comprobadas, 0 con error |
+| Consultas SQL del tablero de incidentes | 11 comprobadas, 0 con error |
+| Paneles del tablero de trazabilidad | 11 de 11 con datos, sobre un incidente de la simulación (`./make.sh verificar`, 21 de octubre) |
 | Orígenes de datos provisionados | Prometheus, PostgreSQL y Elasticsearch, los tres con conexión correcta |
 
 Esa comprobación encontró dos defectos que ninguna validación de sintaxis

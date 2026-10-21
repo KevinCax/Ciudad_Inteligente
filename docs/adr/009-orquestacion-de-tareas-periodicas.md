@@ -56,8 +56,12 @@ pueden disolver: dependen del calendario, no de la llegada de un evento.
 | Indexación en Elasticsearch | — | Ninguna: la resuelve un consumidor (sección 3.2) |
 | Limpieza de claves en Redis | **Ninguna** | Los TTL lo resuelven solos |
 | Chequeos de salud | **Ninguna** | [ADR-008](008-observabilidad-y-slo.md) |
+| Recorridos por calle de las alertas | Cada minuto | [ADR-012](012-recorridos-por-calle.md) (posterior a esta decisión) |
 
-**El trabajo periódico real son dos tareas nocturnas.** De ahí que la pregunta
+**El trabajo periódico real eran dos tareas nocturnas.** Desde el
+[ADR-012](012-recorridos-por-calle.md) hay una tercera, de otra naturaleza: no cierra
+un día, acompaña al flujo y corre cada minuto. Tres tareas siguen sin ser un caso
+para Airflow, y el argumento de esta sección se mantiene. De ahí que la pregunta
 deje de ser "¿conviene Airflow para gobernar el trabajo periódico?" y pase a
 ser **"¿conviene Airflow para dos tareas que corren de madrugada?"**.
 
@@ -151,8 +155,7 @@ La pregunta del enunciado tiene una respuesta corta: **no, no se justifica.**
 
 Airflow resuelve problemas reales —grafos de dependencias, *backfill*,
 reintentos con política, visibilidad para equipos de datos— y ninguno de esos
-problemas existe aquí. Dos tareas nocturnas independientes entre sí no forman un
-grafo. No hay histórico que rellenar. No hay un equipo de datos.
+problemas existe aquí. Tres tareas independientes entre sí no forman un grafo. No hay histórico que rellenar. No hay un equipo de datos.
 
 Adoptar una herramienta por lo que podría necesitarse algún día tiene un costo
 que se paga todos los días, y lo paga un equipo municipal reducido que no tiene
@@ -184,7 +187,7 @@ Ventajas sobre la copia periódica:
   indexación continúa.
 - Reutiliza el patrón ya construido y probado.
 
-Con eso, **el planificador queda con dos tareas nocturnas**, y sostener Airflow
+Con eso, **el planificador queda con dos tareas nocturnas** (hoy son tres, ver 3.3), y sostener Airflow
 para eso resulta indefendible.
 
 ### 3.3 Lo que hará el servicio de tareas
@@ -192,12 +195,19 @@ para eso resulta indefendible.
 | Tarea | Horario | Descripción |
 |---|---|---|
 | **Agregados diarios** | Diaria, 03:00 | Calcula recuentos por zona y tipo del día anterior y los guarda en tablas de resumen |
-| **Retención** | Diaria, 03:30 | Aplica la política de [ADR-007](007-privacidad-y-datos-personales.md): elimina el seudónimo de placa a los 90 días, las coordenadas al año, y borra el evento a los dos, dejando solo el agregado |
+| **Retención** | Diaria, 03:30 | Aplica la política de [ADR-007](007-privacidad-y-datos-personales.md): elimina el seudónimo de placa a los 90 días, las coordenadas al año, y borra el evento a los dos, dejando solo el agregado. Desde el 2026-10-21 también borra los recorridos guardados (365 días) y los avisos (730 días): [ADR-007](007-privacidad-y-datos-personales.md) §4.3 |
+| **Recorridos de alertas** | Cada minuto | Calcula con OSRM el recorrido de las alertas con botón de pánico y un solo vehículo y lo recalcula cuando el rastro crece ([ADR-012](012-recorridos-por-calle.md)) |
 
 El orden no es arbitrario: **los agregados corren antes que la retención**. Si
 la purga borrara los eventos primero, el resumen del día saldría incompleto, y
 esa pérdida sería irreversible porque el agregado es justamente lo que
 sobrevive al borrado.
+
+**Actualización (2026-10-14):** el planificador solo sabía de tareas diarias a hora
+fija y se extendió con tareas **por intervalo**. El cerrojo cambia de forma: el de
+las diarias lleva la fecha y dura casi un día; el de las de intervalo lleva el
+número de ventana y dura lo que el intervalo. No hay todavía pruebas automáticas
+de las tareas por intervalo: las 10 del planificador cubren las diarias.
 
 Ambas se ejecutarán con **bloqueo distribuido en Redis** (`SET NX` con TTL),
 para que dos instancias del servicio no ejecuten la misma purga a la vez. Es el
@@ -230,13 +240,12 @@ necesariamente Airflow: existen orquestadores más ligeros con interfaz web.
 
 ### 3.5 Estado de implementación
 
-**El `indexer` está construido y verificado.** El servicio `jobs` con las dos
-tareas nocturnas sigue pendiente.
+**El `indexer` y el servicio `jobs` están construidos y verificados.**
 
 | Componente | Estado |
 |---|---|
 | Servicio `indexer` (Kafka → Elasticsearch) | **Listo y verificado** |
-| Servicio `jobs` con las dos tareas nocturnas | **Listo y verificado** |
+| Servicio `jobs` con las dos tareas nocturnas y la de recorridos | **Listo y verificado** |
 | Tablas de agregados y política de retención en SQL | **Listo y verificado** |
 
 #### Verificación del servicio de tareas
@@ -263,7 +272,7 @@ verificó con tres eventos sintéticos de distinta antigüedad:
 Los 3 334 eventos del día quedaron intactos, con sus 728 placas. La purga no
 tocó nada que estuviera dentro de plazo.
 
-**El planificador está probado**: 12 pruebas automáticas, incluidas las del
+**El planificador está probado**: 10 pruebas automáticas, incluidas las del
 cerrojo contra un Redis real. Cubren que la tarea corra una sola vez al día
 aunque se revise el minuto varias veces, que un fallo libere el cerrojo para
 poder reintentar el mismo día, que no corra fuera de su hora, y que una zona
@@ -358,7 +367,7 @@ mucho más pequeño.
 
 Airflow es una herramienta potente pensada para organizaciones que ejecutan
 decenas o cientos de procesos automáticos con dependencias entre sí. Este
-sistema necesita **dos tareas, una vez al día**.
+sistema necesita **tres tareas: dos una vez al día y una cada minuto**.
 
 Instalarla exigiría tres programas adicionales funcionando de forma permanente
 —incluido uno con su propia base de datos— que en conjunto consumirían más
@@ -391,8 +400,8 @@ en el documento técnico cuándo hacerlo.
 
 ### Estado
 
-**Construido y verificado.** Las dos tareas nocturnas y el proceso de búsqueda
-funcionan, y se comprobaron con datos reales del sistema en ejecución.
+**Construido y verificado.** Las dos tareas nocturnas, la de recorridos y el proceso
+de búsqueda funcionan, y se comprobaron con datos reales del sistema en ejecución.
 
 ### Riesgo
 
@@ -414,4 +423,4 @@ funcionan, y se comprobaron con datos reales del sistema en ejecución.
   la tarea periódica principal.
 - [ADR-008](008-observabilidad-y-slo.md) — sustituye por completo al DAG de
   chequeos de salud.
-- `services/jobs/` — implementación del planificador y las dos tareas.
+- `services/jobs/` — implementación del planificador y las tres tareas.

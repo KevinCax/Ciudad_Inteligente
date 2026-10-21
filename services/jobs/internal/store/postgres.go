@@ -67,10 +67,12 @@ type PoliticaRetencion struct {
 	DiasPlaca int
 	// DiasCoordenadas: a partir de aqui se eliminan lat y lon. Se conserva la
 	// zona, que basta para analisis por sector y no permite reconstruir un
-	// recorrido con precision.
+	// recorrido con precision. Es tambien el plazo de los recorridos guardados
+	// (alert_routes), que son coordenadas encadenadas.
 	DiasCoordenadas int
-	// DiasBorrado: a partir de aqui el evento se elimina. Lo que queda del
-	// periodo son los agregados diarios.
+	// DiasBorrado: a partir de aqui el evento se elimina, y con el los avisos
+	// registrados (notifications). Lo que queda del periodo son los agregados
+	// diarios.
 	DiasBorrado int
 }
 
@@ -79,16 +81,19 @@ type ResultadoRetencion struct {
 	PlacasEliminadas      int64
 	CoordenadasEliminadas int64
 	EventosBorrados       int64
+	RecorridosBorrados    int64
+	AvisosBorrados        int64
 }
 
 // Total suma las filas afectadas.
 func (r ResultadoRetencion) Total() int64 {
-	return r.PlacasEliminadas + r.CoordenadasEliminadas + r.EventosBorrados
+	return r.PlacasEliminadas + r.CoordenadasEliminadas + r.EventosBorrados +
+		r.RecorridosBorrados + r.AvisosBorrados
 }
 
 // AplicarRetencion degrada y purga el historico segun la politica.
 //
-// Las tres fases se aplican de mas reciente a mas antigua y cada una en su
+// Las cinco fases se aplican de mas reciente a mas antigua y cada una en su
 // propia sentencia, no en una transaccion unica: son operaciones sobre
 // volumenes potencialmente grandes y conviene que un fallo en la ultima no
 // deshaga el trabajo de las anteriores. Todas son idempotentes —repetirlas no
@@ -132,6 +137,45 @@ func (s *Store) AplicarRetencion(ctx context.Context, p PoliticaRetencion) (Resu
 		return res, fmt.Errorf("no se pudieron borrar los eventos antiguos: %w", err)
 	}
 	res.EventosBorrados = tag.RowsAffected()
+
+	// Fase 4: borrar los recorridos guardados.
+	//
+	// La geometria de alert_routes es una secuencia de coordenadas que reproduce
+	// por donde circulo un vehiculo. Es el mismo dato que la fase 2 quita de los
+	// eventos, de modo que sigue su mismo plazo: sin esta fase, una trayectoria
+	// sobreviviria indefinidamente a las coordenadas de las que sale (ADR-007,
+	// apartado 4.3).
+	//
+	// La edad es la de la alerta, no la del calculo: la ruta se recalcula mientras
+	// el rastro crece, y su fecha de calculo no dice cuando ocurrio el incidente.
+	// Si la alerta ya no existe se usa la fecha de calculo, para que una fila
+	// huerfana no se quede para siempre.
+	const borrarRecorridos = `
+		DELETE FROM alert_routes r
+		WHERE coalesce(
+		        (SELECT a.created_at FROM alerts a WHERE a.alert_id = r.alert_id),
+		        r.calculado_en
+		      ) < now() - make_interval(days => $1)`
+
+	tag, err = s.pool.Exec(ctx, borrarRecorridos, p.DiasCoordenadas)
+	if err != nil {
+		return res, fmt.Errorf("no se pudieron borrar los recorridos antiguos: %w", err)
+	}
+	res.RecorridosBorrados = tag.RowsAffected()
+
+	// Fase 5: borrar los avisos.
+	//
+	// Un aviso dice a quien se llamo por un incidente de una zona y una hora. Se
+	// conserva tanto como el evento que lo origino, que es lo que permite
+	// responder a una reclamacion con el detalle delante; pasado ese plazo solo
+	// queda el agregado diario.
+	const borrarAvisos = `DELETE FROM notifications WHERE creado_en < now() - make_interval(days => $1)`
+
+	tag, err = s.pool.Exec(ctx, borrarAvisos, p.DiasBorrado)
+	if err != nil {
+		return res, fmt.Errorf("no se pudieron borrar los avisos antiguos: %w", err)
+	}
+	res.AvisosBorrados = tag.RowsAffected()
 
 	return res, nil
 }

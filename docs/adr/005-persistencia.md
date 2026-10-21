@@ -25,6 +25,8 @@ especializada es aparentemente fuerte.
 | `events` | ~1,7 M/día, 2–3 GB/día | Por rango de tiempo, zona y tipo; por `event_id` al investigar |
 | `alerts` | decenas al día | Por rango, zona y tipo; con su evidencia |
 | Agregados diarios | cientos de filas/día | Por rango de fechas |
+| `notifications` | de una a tres filas por alerta | Por alerta y por organismo ([ADR-011](011-aviso-a-terceros.md)) |
+| `alert_routes` | una fila por alerta | Por alerta; geometría del recorrido ([ADR-012](012-recorridos-por-calle.md)) |
 
 Dos observaciones que condicionan la decisión:
 
@@ -144,6 +146,10 @@ Kafka ──▶ Persister ──▶ PostgreSQL     archivo autoritativo
       └──▶ Indexer   ──▶ Elasticsearch búsqueda y análisis
 ```
 
+Un tercer escritor, el notifier, registra los avisos en PostgreSQL, y `jobs`
+escribe los agregados y los recorridos. Ninguno de los dos toca el camino de los
+eventos.
+
 Ambos consumen del broker de forma independiente
 ([ADR-004](004-broker-de-eventos.md)). Esa separación tiene una consecuencia
 operativa valiosa: **si Elasticsearch se cae, el archivo sigue completo**, y al
@@ -218,6 +224,12 @@ La escritura de un lote de cien tardó decenas de milisegundos en las pruebas.
   borrado a los dos años, y las consultas por rango se degradarán. El
   particionado nativo de PostgreSQL por mes es la solución, y **está
   pendiente**.
+- **El esquema ya no se aplica solo con el volumen vacío.** El directorio de
+  inicialización de PostgreSQL solo corre la primera vez, de modo que añadir una
+  tabla obligaba a borrar los datos. Un servicio de un solo uso, `postgres-migrate`,
+  aplica `deploy/sql/*.sql` en cada arranque; todo lleva `IF NOT EXISTS`. La base de
+  producción es gestionada y no está en ningún Compose: ahí el paso es manual y
+  está en `deploy/README.md`.
 - **Compresión limitada** frente a un motor especializado: más costo de
   almacenamiento en la nube.
 - **Dos motores que operar**, con sus dos modelos de retención.
@@ -290,4 +302,4 @@ adicional, solo trabajo técnico.
   contenido del payload.
 - [ADR-009](009-orquestacion-de-tareas-periodicas.md) — indexación en tiempo
   casi real y agregados diarios.
-- `deploy/sql/001_schema.sql` — esquema, índices y restricciones.
+- `deploy/sql/` (001 a 004) — esquema, índices, restricciones, avisos y recorridos.

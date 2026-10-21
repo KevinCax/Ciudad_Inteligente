@@ -33,21 +33,13 @@ Si se cae el enlace, la ciudad sigue detectando incidentes y generando alertas: 
 
 Situar el persister exactamente sobre la frontera LAN→nube tiene una consecuencia afortunada: es también el lugar natural para tokenizar la placa vehicular antes de que el dato salga del control municipal.
 
-El esquemático completo —nodos, servicios, puertos y segmentos de red— está en
-[`docs/diagramas/infraestructura.svg`](docs/diagramas/infraestructura.svg). Se
-genera desde código, de modo que el SVG y el PNG del informe no puedan
-discrepar:
-
-```bash
-python docs/diagramas/infraestructura.py
-```
 
 **Prometheus y Grafana viven en la LAN, no en la nube.** Raspar métricas exige
 que el recolector abra conexiones hacia cada servicio; con Prometheus en la
 nube esas serían conexiones de **entrada** a la red municipal, que es lo que
 este modelo excluye. Y si el enlace cae, es justo cuando hacen falta las
 métricas. El razonamiento completo está en
-[ADR-008 §3.5.1](docs/adr/008-observabilidad-y-slo.md).
+[ADR-008 3.5.1](docs/adr/008-observabilidad-y-slo.md).
 
 ## Microservicios
 
@@ -294,5 +286,16 @@ Las decisiones relevantes se documentan como ADR en [`docs/adr/`](docs/adr/), co
 | [005](docs/adr/005-persistencia.md) | Persistencia: PostgreSQL relacional + Elasticsearch | Aceptado |
 | [010](docs/adr/010-contenerizacion-y-orquestacion.md) | Contenerización: Docker Compose, sin Kubernetes | Aceptado |
 
-El enunciado exige un mínimo de seis; **hay diez aceptados**, y entre ellos están las ocho decisiones que la sección 4.2 enumera como obligatorias. Todos documentan decisiones aplicadas en el código y verificadas sobre el sistema en ejecución.
+## Proyecto elaborado por:
+
+ **Kevin Denilson Cax Coc** 
+
+ **Nilver Denilson Avila Alarcónr** 
+
+ **Rafael Estuardo Galindo Ramírez**
+
+ **René Alexander Machic Morales**
+
+ **Alex Rafael Fernando Raxón Iquic**
+
 

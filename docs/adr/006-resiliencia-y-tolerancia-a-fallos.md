@@ -38,6 +38,8 @@ no fingir que es cero.
 | Caída de Redis | Baja | Se pierde la ventana de correlación |
 | Caída de PostgreSQL | Baja | Se detiene el archivo histórico |
 | Petición abortada por el cliente | Alta bajo carga | Estado inconsistente |
+| Consumidor que se une antes de que exista su topic | Alta en un arranque en frío | No consume, sin error ni aviso |
+| Motor de rutas no disponible | Media | Alertas sin recorrido |
 
 ## 2. Opciones consideradas
 
@@ -176,6 +178,7 @@ garantiza a su manera:
 | Ingestor | `SET NX EX` sobre `ingest:seen:{event_id}` | Una operación atómica |
 | Correlator | `SET NX EX` sobre `corr:seen:{event_id}` | Ídem |
 | Persister | `INSERT ... ON CONFLICT DO NOTHING` | Lo resuelve la clave primaria |
+| Notifier | `UNIQUE (alert_id, organismo)` y `ON CONFLICT DO NOTHING` | Protege el registro, no la entrega: ver [ADR-011](011-aviso-a-terceros.md) §3.3 |
 
 La forma intuitiva —comprobar si la clave existe y después escribirla— deja
 entre ambas llamadas un hueco por el que cabe otra instancia procesando el
@@ -211,7 +214,20 @@ ya murió. Se usa `context.WithoutCancel`, que conserva los valores —el
 `trace_id` entre ellos— pero descarta la cancelación, con un plazo acotado para
 que no se quede colgada.
 
-### 3.7 Matriz de comportamiento ante fallos
+### 3.7 Un consumidor no debe unirse antes de que exista su topic
+
+Se descubrió al arrancar un Kafka recién creado. `kafka-go` no se entera de que
+un topic aparece después de que el consumidor se unió al grupo: este queda
+«estable» con cero particiones asignadas y no consume nada, sin error y sin
+métrica que lo delate. Persister y notifier no consumían las alertas, que por eso
+no se archivaban ni se notificaban.
+
+La corrección es de orden de arranque: persister, indexer, notifier, correlator e
+ingestor esperan a que `kafka-init` termine (`service_completed_successfully`).
+Que el síntoma sea silencioso es el motivo de que figure aquí: es de la misma
+familia que el resto de esta decisión, un fallo que no se manifiesta solo.
+
+### 3.8 Matriz de comportamiento ante fallos
 
 | Componente caído | Ingesta | Detección | Archivo | Respuesta al cliente |
 |---|---|---|---|---|
@@ -219,6 +235,8 @@ que no se quede colgada.
 | PostgreSQL | Continúa | Continúa | Se detiene y acumula | `202` |
 | Enlace a la nube | Continúa | Continúa | Se detiene y acumula | `202` |
 | Elasticsearch / Grafana | Continúa | Continúa | Continúa | `202` |
+| Notifier | Continúa | Continúa | Continúa; los avisos esperan en Kafka | `202` |
+| Motor de rutas (OSRM) | Continúa | Continúa | Continúa; los recorridos se reintentan hasta 3 veces | `202` |
 | Redis | **Se detiene** | Se degrada | Continúa | `503` |
 | Kafka | **Se detiene** | Se detiene | Se detiene | `503` |
 

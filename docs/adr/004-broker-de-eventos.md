@@ -22,8 +22,8 @@ Eso le impone tres requisitos:
    confirmado, y eso solo funciona si los mensajes siguen ahí.
 2. **Particionado por clave**, para que los eventos de una misma zona conserven
    su orden relativo. La correlación por ventana depende de ello.
-3. **Varios consumidores independientes** sobre el mismo flujo: correlator,
-   persister e indexer leen `events.standardized` sin interferirse.
+3. **Varios consumidores independientes** sobre el mismo flujo: correlator, persister e indexer leen `events.standardized` sin interferirse, y
+   persister, indexer y notifier hacen lo mismo con `correlated.alerts`.
 
 El enunciado lo plantea como decisión a documentar (sección 4.2): Kafka frente a
 RabbitMQ frente a un servicio gestionado, con el trade-off de rendimiento,
@@ -143,6 +143,7 @@ sincronizar.
 | `correlated.alerts` | 7 d | Las alertas alimentan análisis posteriores |
 | `events.dlq` | 14 d | Su función es que alguien pueda revisarla y reprocesar |
 | `acks` | `all` | El `202` al cliente significa que Kafka confirmó |
+| Primera lectura de un grupo nuevo | persister e indexer desde el principio; correlator y notifier desde lo último | Archivar de más es inocuo; reprocesar alertas viejas no (ADR-011 §3.4) |
 | Creación automática de topics | desactivada | Un nombre mal escrito debe fallar, no crear un topic fantasma |
 
 El factor de replicación de 1 merece una nota: **es una limitación consciente
@@ -200,6 +201,13 @@ reparte las claves igual.
   nombre legible impide arrancar con un error poco evidente.
 - **Factor de replicación 1 en laboratorio**: un solo broker es un punto único
   de fallo, y subirlo en producción es trabajo pendiente.
+- **`kafka-go` no detecta un topic creado después de unirse al grupo.** Un
+  consumidor que arranca antes de que exista su topic queda con cero particiones
+  asignadas, sin error ni aviso, y el grupo figura como estable. Se vio en un Kafka
+  recién creado: el persister y el notifier no consumían las alertas porque
+  arrancaron antes que `kafka-init`, y las alertas no se archivaban ni se
+  notificaban. Se resolvió haciendo que cinco servicios esperen a `kafka-init`
+  (`service_completed_successfully`).
 - **Conceptos que el equipo debe dominar**: offsets, grupos de consumo,
   rebalanceo y retención. Es más superficie de aprendizaje que una cola simple.
 

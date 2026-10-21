@@ -168,7 +168,7 @@ Productor ──en claro──▶ Ingestor ──en claro──▶ Kafka (LAN) �
                                   PostgreSQL            Elasticsearch
 ```
 
-Solo **dos componentes escriben fuera de la LAN**: el persister y el indexer
+Solo **dos componentes escriben eventos fuera de la LAN**: el persister y el indexer
 ([ADR-001](001-plataforma-de-despliegue.md)). Ambos se sitúan exactamente sobre
 la frontera, y ambos aplican la misma transformación con **la misma llave**.
 
@@ -183,8 +183,10 @@ control municipal en claro, basta revisar dos componentes**, y ambos comparten
 el mismo paquete de tokenización. No hay que rastrear cada consulta del sistema
 buscando fugas.
 
-El servicio `jobs` también habla con la nube, pero solo para borrar y agregar:
-no escribe datos personales nuevos.
+El servicio `jobs` también habla con la nube: borra, agrega y, desde el
+[ADR-012](012-recorridos-por-calle.md), guarda la geometría de los recorridos, que
+sí es ubicación y por eso sigue la misma retención que las coordenadas (ver 4.3). El notifier escribe los avisos, que no contienen
+placas ni coordenadas.
 
 Dentro de la LAN la placa circula en claro a propósito. El broker no sale de la
 red municipal, y la correlación necesita el valor original para agrupar
@@ -248,7 +250,7 @@ problemas a la vez:
 1. **La clave de Redis deja de ser una matrícula.** La ventana por vehículo es
    un `corr:plate:<seudónimo>`. Si se indexara por la placa en claro, un `SCAN`
    sobre Redis devolvería el listado de matrículas que han circulado por la
-   ciudad en los últimos veinte minutos: el estado transitorio de la
+   ciudad en los últimos treinta minutos: el estado transitorio de la
    correlación se habría convertido en un fichero de vehículos.
 
 2. **El seudónimo coincide con el archivado.** Al usar la misma llave, el
@@ -310,12 +312,16 @@ Tres límites acotan el uso, y conviene que figuren por escrito:
 - **El disparador.** La regla no se activa por circular, sino por acumular
   infracciones **y** existir un botón de pánico en la misma zona. Un vehículo
   que respeta las normas no genera ninguna cadena por mucho que circule.
-- **El alcance de la ventana.** La correlación en vivo solo mira diez minutos
-  atrás; el histórico de noventa días requiere una consulta explícita a la base,
+- **El alcance de la ventana.** La correlación en vivo solo mira quince minutos atrás; el histórico de noventa días requiere una consulta explícita a la base,
   que es una acción deliberada de un operador y no un proceso automático.
 
 Queda pendiente que la Municipalidad apruebe expresamente este uso, como ya
 estaba pendiente la aprobación de los plazos de retención.
+
+**Actualización (2026-10-21):** el recorrido ahora se dibuja siguiendo las calles
+([ADR-012](012-recorridos-por-calle.md)). El motor de rutas corre en la LAN, de
+modo que las coordenadas no salen a ningún tercero para calcularlo; pero la
+geometría resultante se guarda en la nube, y de ello trata el apartado 4.3.
 
 ### 4.2 La retención está implementada, con un matiz
 
@@ -341,7 +347,50 @@ propuesta técnica, no una decisión institucional. **La Municipalidad debe
 aprobarlos formalmente**, porque determinan durante cuánto tiempo conserva
 datos personales de ciudadanos y eso no es una decisión de ingeniería.
 
-### 4.3 Sin control de acceso granular
+### 4.3 Los recorridos guardados y los avisos siguen la retención
+
+Esta sección recoge una incoherencia que existió y ya está corregida. Se deja
+escrita porque explica por qué la política abarca más que los eventos.
+
+Al incorporar los recorridos por calle ([ADR-012](012-recorridos-por-calle.md)),
+`jobs` pasó a guardar en `alert_routes` la geometría del recorrido de cada alerta
+con botón de pánico y un solo vehículo: una secuencia de coordenadas que reproduce
+por dónde circuló. No lleva la placa, pero sí el `alert_id`, que enlaza con los
+eventos y, mientras existan, con el seudónimo. La retención solo actuaba sobre
+`events`, de modo que una trayectoria sobrevivía indefinidamente aunque el evento
+del que salía ya hubiera perdido sus coordenadas.
+
+La retención aplica ahora cinco fases, de la más reciente a la más antigua:
+
+| Fase | Qué hace | Plazo |
+|---|---|---|
+| 1 | Elimina el seudónimo de la placa de los eventos | 90 días |
+| 2 | Elimina las coordenadas de los eventos | 365 días |
+| 3 | Borra los eventos | 730 días |
+| 4 | Borra los **recorridos guardados** (`alert_routes`) | 365 días, el de las coordenadas |
+| 5 | Borra los **avisos** (`notifications`) | 730 días, el del borrado |
+
+Dos criterios que conviene saber:
+
+- **La edad de un recorrido es la de su alerta, no la de su cálculo.** La ruta se
+  recalcula mientras el rastro crece, y su fecha de cálculo no dice cuándo ocurrió
+  el incidente. Si la alerta ya no existe, se usa la fecha de cálculo, para que una
+  fila huérfana no se quede para siempre.
+- **El recorrido sigue el plazo de las coordenadas porque es lo mismo:**
+  coordenadas encadenadas. Un año de plazo para la coordenada de un evento y
+  indefinido para su trayectoria no tendría sentido.
+
+Se verificó con una prueba automática contra un PostgreSQL real, en un esquema
+temporal para no tocar datos de nadie, y sobre el sistema en ejecución: una alerta
+de 400 días con su recorrido y un aviso de 800 días se eliminaron al lanzar la
+retención a mano, y los datos recientes quedaron intactos.
+
+**Lo que no se purga, y por qué.** Las alertas (`alerts`) no se borran: guardan tipo,
+zona, ventana, puntaje e identificadores de evidencia, sin placa ni coordenadas, y
+son el registro al que apuntan los agregados diarios y los avisos. Es una decisión
+que, como los plazos del apartado 4.2, debe aprobar la Municipalidad.
+
+### 4.4 Sin control de acceso granular
 
 Cualquiera con credenciales de la base ve todo el histórico. No hay roles que
 distingan entre consultar agregados y consultar eventos individuales. Los
@@ -353,7 +402,8 @@ directo a la base no está segmentado.
 ### Positivas
 
 - La nube nunca recibe placas identificables.
-- Auditable en un solo punto del sistema.
+- Auditable en pocos puntos: los dos servicios que archivan eventos y el que
+  guarda recorridos, que además cae bajo la misma retención.
 - La correlación por vehículo se conserva íntegra.
 - El punto de corte del despliegue y la frontera de privacidad coinciden: una
   sola decisión arquitectónica resuelve dos problemas.
@@ -372,8 +422,8 @@ directo a la base no está segmentado.
   útil para investigación. Es el reverso exacto de la propiedad de seguridad.
 - **Los datos siguen siendo personales.** Todas las obligaciones de tratamiento
   aplican igual; la seudonimización reduce el riesgo, no la responsabilidad.
-- **La retención queda pendiente**, con el archivo creciendo sin límite mientras
-  tanto.
+- **Las alertas no se purgan.** No llevan datos personales, pero se conservan
+  sin plazo hasta que la Municipalidad decida uno (apartado 4.3).
 
 ## 6. Evidencia medida
 

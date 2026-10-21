@@ -162,9 +162,9 @@ no debería estar haciendo.
 │                  Redis      │  └── Redis (ventanas)         │
 │                (dedupe)     │                               │
 │                             ▼                               │
-│         Persister · Indexer · Jobs ◄── correlated.alerts    │
+│  Persister · Indexer · Notifier · Jobs ◄── alertas          │
 │                             │                               │
-│         Prometheus · Grafana (observabilidad, local)        │
+│  Prometheus · Grafana · OSRM (observabilidad y rutas)       │
 │        ▼ tokenización de la placa antes de salir ▼          │
 └─────────────────────────────┬───────────────────────────────┘
                               │  TLS, egress controlado
@@ -176,15 +176,15 @@ no debería estar haciendo.
 El esquemático completo, con los segmentos de red y los puertos, está en
 `docs/diagramas/infraestructura.svg`.
 
-**En la LAN:** el ingestor, Kafka, Redis, el correlator, los tres servicios de
-salida —persister, indexer y jobs— y la observabilidad. Todo el recorrido
+**En la LAN:** el ingestor, Kafka, Redis, el correlator, los cuatro servicios de salida (persister, indexer, notifier y jobs), el motor de
+rutas OSRM ([ADR-012](012-recorridos-por-calle.md)) y la observabilidad. Todo el recorrido
 evento → alerta.
 
 **En la nube:** PostgreSQL gestionada, Elasticsearch y Kibana. Archivo
 histórico y búsqueda, nada más.
 
-**Los servicios de salida son la pieza que hace posible el corte.** Consumen de
-Kafka y escriben por lotes en la nube. Ni el ingestor ni el correlator escriben
+**Los servicios de salida son la pieza que hace posible el corte.** Consumen de Kafka y escriben en la nube: el persister y el indexer por
+lotes, el notifier y jobs en volúmenes mucho menores. Ni el ingestor ni el correlator escriben
 fuera de la LAN, de modo que la detección no depende del enlace a internet.
 
 **La observabilidad también se queda dentro, y no por comodidad.** Recolectar
@@ -234,7 +234,8 @@ Si el enlace a internet se cae:
   reglas se evalúan en memoria.
 - Las alertas **siguen publicándose** en Kafka, donde quedan disponibles para
   cualquier consumidor local.
-- Lo único que se detiene es el **archivado**. El persister acumula retraso y
+- Lo único que se detiene es el **archivado** y el registro de los avisos a
+  terceros ([ADR-011](011-aviso-a-terceros.md)). El persister acumula retraso y
   reintenta; los eventos y alertas esperan en Kafka, que los retiene 72 horas
   y 7 días respectivamente.
 
@@ -278,8 +279,9 @@ paga una vez cada cien eventos en lugar de una vez por evento.
   tableros sirven para análisis, no para despacho.
 - **Costo de transferencia de datos.** Bajo en volumen —eventos JSON pequeños—
   pero distinto de cero y creciente con el número de sensores.
-- **Custodia de la llave de tokenización.** Aparece un secreto crítico que hay
-  que rotar, respaldar y proteger. Si se pierde, el histórico queda
+- **Custodia de la llave de tokenización.** Aparece un secreto crítico que hay que rotar, respaldar y proteger, y que
+  usan tres servicios (persister, indexer y correlator), de modo que hay tres
+  entornos donde custodiarlo ([ADR-007](007-privacidad-y-datos-personales.md)). Si se pierde, el histórico queda
   irreversiblemente anonimizado; si se filtra, la seudonimización pierde su
   valor.
 - **Dependencia parcial del proveedor** para la base gestionada. Se mitiga

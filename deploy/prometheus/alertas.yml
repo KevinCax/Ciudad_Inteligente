@@ -160,7 +160,7 @@ groups:
             dependencias esta caida.
 
       - alert: ServicioCaido
-        expr: up{job=~"ingestor|correlator|persister|indexer|jobs"} == 0
+        expr: up{job=~"ingestor|correlator|persister|indexer|jobs|notifier"} == 0
         for: 2m
         labels:
           severidad: critica
@@ -170,8 +170,10 @@ groups:
             Depende de cual sea. Si es 'ingestor' o 'correlator', la ciudad ha
             dejado de detectar incidentes: maxima prioridad. Si es 'persister',
             la deteccion continua y solo se retrasa el archivo. Si es 'indexer',
-            solo se retrasa la busqueda historica. Si es 'jobs', no pasa nada
-            hasta la proxima ventana nocturna.
+            solo se retrasa la busqueda historica. Si es 'notifier', la deteccion
+            continua pero no se registra a quien se aviso: las alertas esperan en
+            Kafka. Si es 'jobs', no se calculan los recorridos y la ventana
+            nocturna no corre.
 
   # =========================================================================
   # Salud interna del sistema

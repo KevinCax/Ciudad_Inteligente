@@ -9,8 +9,8 @@
 
 ## 1. Contexto
 
-El sistema tiene cinco microservicios —ingestor, correlator, persister, indexer
-y jobs— más una herramienta de carga. Hay que decidir cómo se organizan en
+El sistema tiene seis microservicios (ingestor, correlator, persister, indexer,
+jobs y notifier) más una herramienta de carga. Hay que decidir cómo se organizan en
 control de versiones.
 
 La decisión parece administrativa y no lo es: determina si los servicios pueden
@@ -19,7 +19,8 @@ arquitectura de microservicios de un monolito repartido en carpetas.
 
 ### El problema concreto: el contrato compartido
 
-Los cinco servicios hablan el mismo evento canónico v1.0. En cuanto se comparte
+Los servicios hablan dos contratos: el evento canónico v1.0 y la alerta
+correlacionada v1.0. En cuanto se comparte
 una definición entre servicios aparece la tentación de extraerla a una
 biblioteca común, y con ella el riesgo de acoplarlos.
 
@@ -105,7 +106,8 @@ Ciudad_Inteligente_GO/
 │   ├── correlator/  go.mod → ciudadinteligente/correlator
 │   ├── persister/   go.mod → ciudadinteligente/persister
 │   ├── indexer/     go.mod → ciudadinteligente/indexer
-│   └── jobs/        go.mod → ciudadinteligente/jobs
+│   ├── jobs/        go.mod → ciudadinteligente/jobs
+│   └── notifier/    go.mod → ciudadinteligente/notifier
 ├── deploy/
 ├── docs/adr/
 └── test/load/       go.mod propio
@@ -137,15 +139,15 @@ make check-contracts
 Compara cada copia con la fuente de verdad y falla si difieren. Corre dentro de
 `make check`, de modo que nadie puede olvidarla.
 
-### 3.2 Por qué monorepo y no cinco repositorios
+### 3.2 Por qué monorepo y no seis repositorios
 
 Lo que decide es el **costo de cambiar el contrato**.
 
 En polyrepo, subir el evento canónico a la versión 1.1 significa: publicar el
-contrato nuevo, abrir cinco pull requests, coordinar su orden de integración y
+contrato nuevo, abrir seis pull requests, coordinar su orden de integración y
 verificar que ninguna combinación intermedia rompa el sistema. En monorepo es
-un commit que toca seis archivos y que la comprobación de contratos valida de
-una vez.
+un commit que toca la fuente y sus ocho copias, y que la comprobación de contratos
+valida de una vez.
 
 Con un equipo de estudiantes y una fecha fija, esa diferencia es lo que decide.
 
@@ -166,7 +168,7 @@ módulos separados. El monorepo es solo dónde viven hoy.
 
 ### Positivas
 
-- Los cinco servicios se compilan y despliegan por separado, verificado en el
+- Los seis servicios se compilan y despliegan por separado, verificado en el
   despliegue real.
 - Dependencias mínimas por servicio, lo que reduce la superficie que auditar.
 - Un cambio de contrato es un commit atómico y verificado.
@@ -175,9 +177,12 @@ módulos separados. El monorepo es solo dónde viven hoy.
 
 ### Negativas aceptadas
 
-- **El contrato está copiado en cinco sitios.** La comprobación automática
-  impide la divergencia, pero sigue siendo duplicación que hay que sincronizar
-  al cambiarlo.
+- **El contrato está copiado en ocho sitios**: cuatro copias del evento (ingestor,
+  correlator, persister e indexer) y cuatro de la alerta (correlator, persister,
+  indexer y notifier). La comprobación automática impide la divergencia, pero sigue
+  siendo duplicación que hay que sincronizar al cambiarlo. Las listas de quién recibe
+  cada contrato están en el `Makefile` y la comprobación se deriva de ellas: antes
+  estaban escritas copia por copia y `check-contracts` solo verificaba 3 de 7.
 - **Hay código repetido entre servicios**: el arranque, la carga de
   configuración, el registro estructurado y el bucle de lotes se parecen mucho
   entre el persister y el indexer. Es deliberado —extraerlo los acoplaría— pero
@@ -185,8 +190,7 @@ módulos separados. El monorepo es solo dónde viven hoy.
 - **La independencia hay que sostenerla a propósito.** Nada impide técnicamente
   que alguien añada un `replace ../otro-servicio` y rompa la propiedad. Es una
   disciplina, no una garantía del compilador.
-- **El repositorio crece.** Cinco módulos significan cinco `go.sum` y cinco
-  árboles de dependencias que actualizar por separado.
+- **El repositorio crece.** Seis módulos significan seis `go.sum` y seis árboles de dependencias que actualizar por separado.
 
 ## 5. Impacto en el negocio
 
@@ -194,7 +198,7 @@ módulos separados. El monorepo es solo dónde viven hoy.
 
 ### Qué se decidió
 
-Que los cinco programas del sistema vivan **en un mismo archivo de proyecto,
+Que los seis programas del sistema vivan **en un mismo archivo de proyecto,
 pero como piezas independientes**: se pueden actualizar y reemplazar uno por uno,
 sin tocar los demás.
 

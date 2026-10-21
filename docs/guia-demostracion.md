@@ -1,19 +1,5 @@
 # Guía de demostración
 
-Paso a paso para levantar el sistema y probarlo en vivo. Cada prueba dice **qué
-ejecutar**, **qué debe salir** y **qué demuestra**, para poder responder si
-alguien pregunta "¿y eso qué prueba?".
-
-> **Terminal:** Git Bash, desde la raíz del proyecto.
-> No hace falta `jq`: se usa `python -m json.tool`, que viene con Python.
->
-> **Al copiar órdenes, cuidado con el `$`.** Algunas llevan `$(...)` dentro, y
-> si al pegar se pierde el `$` inicial, bash responde
-> `syntax error near unexpected token` sin explicar nada. Conviene copiar con
-> el botón de copiar del bloque, no seleccionando con el ratón.
-
----
-
 ## Paso 0 · Preparar la sesión
 
 Abrir **Docker Desktop** y esperar a que arranque. Después, en Git Bash:
@@ -627,14 +613,3 @@ Para empezar de cero:
 ./make.sh down && ./make.sh up && ./make.sh up-cloud
 ```
 
----
-
-## Guion corto, si hay poco tiempo
-
-```bash
-./make.sh up && ./make.sh up-cloud     # 1. levantar
-./make.sh load enunciado               # 2. los dos renglones del enunciado
-./make.sh load rafaga                  # 3. picos de carga
-```
-
-Y abrir Grafana en http://localhost:3000 para cerrar con los tableros.

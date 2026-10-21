@@ -9,8 +9,9 @@
 
 ## 1. Contexto
 
-El sistema son cinco servicios propios más seis componentes de infraestructura
-—Kafka, Redis, PostgreSQL, Elasticsearch, Prometheus y Grafana— repartidos en
+El sistema son seis servicios propios más siete componentes de infraestructura
+(Kafka, Redis, PostgreSQL, Elasticsearch, Prometheus, Grafana y el motor de rutas
+OSRM) repartidos en
 dos capas por el corte híbrido del
 [ADR-001](001-plataforma-de-despliegue.md). Hay que decidir cómo se empaquetan
 y cómo se ponen en marcha.
@@ -37,7 +38,7 @@ no hace falta, porque está medida:
 | Respuestas fuera de `202` | ninguna |
 | Latencia p99 bajo ráfaga | 19,7 ms |
 | Instancias necesarias para absorberla | **una de cada servicio** |
-| Memoria residente por servicio | 15 – 19 MB |
+| Memoria residente por servicio | 13 – 18 MB |
 | Arranque de un servicio | 7 – 50 ms |
 
 Es un dato que condiciona todo lo demás: **el escalado horizontal automático,
@@ -161,30 +162,33 @@ una vez al mes.
 
 | Archivo | Dónde corre | Qué contiene |
 |---|---|---|
-| `docker-compose.edge.yml` | LAN municipal | Kafka (KRaft), Redis, los cinco microservicios, Prometheus, Grafana, Kafka-UI |
+| `docker-compose.edge.yml` | LAN municipal | Kafka (KRaft) y su inicializador, Redis, los seis microservicios, el motor de rutas OSRM, Prometheus, Grafana, Kafka-UI |
 | `docker-compose.cloud.yml` | Nube | Elasticsearch, Kibana |
-| `docker-compose.dev.yml` | Máquina del desarrollador | PostgreSQL local, en lugar de la base gestionada |
+| `docker-compose.dev.yml` | Máquina del desarrollador | PostgreSQL local, en lugar de la base gestionada, y `postgres-migrate`, que aplica el esquema en cada arranque |
 
 Que el corte del [ADR-001](001-plataforma-de-despliegue.md) coincida con la
 frontera entre dos archivos no es cosmético: hace que la pregunta *"¿qué pasa
 si se cae el enlace?"* se responda leyendo cuál de los dos sigue arriba.
 
-Los servicios que cruzan la frontera —persister e indexer— **corren en la capa
-`edge`** aunque escriban en la nube. Es deliberado: así la lectura de Kafka es
+Los servicios que cruzan la frontera (persister, indexer, notifier y jobs)
+**corren en la capa `edge`** aunque escriban en la nube. Es deliberado: así la lectura de Kafka es
 local y solo la escritura, ya por lotes, viaja por el enlace.
 
 ### 3.3 Qué aporta Compose que es suficiente
 
 | Mecanismo | Uso en el proyecto | Qué cubre |
 |---|---|---|
-| `restart: unless-stopped` | 8 servicios en `edge`, 4 en `cloud` | Un proceso que muere vuelve solo; sobrevive al reinicio del servidor |
-| `healthcheck` | 7 servicios en `edge` | Distingue *arrancado* de *listo*, que no es lo mismo en Kafka ni en Elasticsearch |
-| `depends_on: condition: service_healthy` | 9 dependencias | Arranque ordenado: el ingestor no arranca antes que Kafka esté listo |
+| `restart: unless-stopped` | 12 servicios en `edge`, 2 en `cloud`, 1 en `dev` | Un proceso que muere vuelve solo; sobrevive al reinicio del servidor |
+| `healthcheck` | 9 servicios en `edge`, 1 en `cloud`, 1 en `dev` | Distingue *arrancado* de *listo*, que no es lo mismo en Kafka ni en Elasticsearch |
+| `depends_on: condition: service_healthy` | 12 dependencias | Arranque ordenado: el ingestor no arranca antes que Kafka esté listo |
+| `depends_on: condition: service_completed_successfully` | 9 dependencias | Espera a procesos de un solo uso: los topics de Kafka (`kafka-init`) y el esquema de la base (`postgres-migrate`) |
 
 La tercera fila resuelve un problema concreto y muy visible en una demostración
 en vivo: sin ella, los servicios arrancan a la vez, fallan al conectar y
 dependen de que el reinicio los salve. Con ella, el sistema sube en orden a la
-primera.
+primera. La espera a `kafka-init` no es un detalle: sin ella, un consumidor que se
+une antes de que exista su topic queda sin particiones y sin error
+([ADR-004](004-broker-de-eventos.md)).
 
 ### 3.4 Las imágenes
 
@@ -203,14 +207,14 @@ justamente la disciplina que sostiene el
 
 Es lo que permite descartar Kubernetes sin descartarlo para siempre.
 
-Los cinco servicios ya cumplen lo que Kubernetes espera de una aplicación:
+Los seis servicios ya cumplen lo que Kubernetes espera de una aplicación:
 
 | Propiedad | Estado hoy | Qué sería en Kubernetes |
 |---|---|---|
 | Sin estado en el proceso | Sí; el estado vive en Redis, Kafka y PostgreSQL | `Deployment` sin volúmenes |
 | Configuración por variables de entorno | Sí, sin archivos de configuración | `ConfigMap` y `Secret` |
-| Endpoint de salud | `/health` en los cinco | Sondas de vitalidad y disponibilidad |
-| Métricas expuestas | `/metrics` en los cinco | Escrapeo por anotación |
+| Endpoint de salud | `/health` en los seis | Sondas de vitalidad y disponibilidad |
+| Métricas expuestas | `/metrics` en los seis | Escrapeo por anotación |
 | Cierre ordenado ante señal | Sí, con confirmación de offsets pendientes | `terminationGracePeriodSeconds` |
 | Imagen mínima | 22 – 29 MB, distroless | Imagen de contenedor |
 

@@ -242,6 +242,8 @@ func tareaRetencion(almacen *store.Store, es *esearch.Client, cfg *config.Config
 			"placas_eliminadas":      pg.PlacasEliminadas,
 			"coordenadas_eliminadas": pg.CoordenadasEliminadas,
 			"eventos_borrados":       pg.EventosBorrados,
+			"recorridos_borrados":    pg.RecorridosBorrados,
+			"avisos_borrados":        pg.AvisosBorrados,
 		}
 		total := pg.Total()
 
