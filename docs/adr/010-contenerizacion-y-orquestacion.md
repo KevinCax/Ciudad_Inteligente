@@ -193,8 +193,9 @@ une antes de que exista su topic queda sin particiones y sin error
 ### 3.4 Las imágenes
 
 `distroless/static` sobre compilación en dos etapas. Las imágenes finales pesan
-entre **22 y 29 MB**, frente a los 257 MB que ocupa una imagen base de Java
-antes siquiera de añadir la aplicación ([ADR-002](002-lenguaje-y-runtime.md)).
+entre **22 y 29 MB**, frente a los 257 MB que ocupa una imagen base de Java antes siquiera de añadir la
+aplicación. Es una referencia de contraste y no el motivo de haber elegido Go,
+que fue una decisión del equipo ([ADR-002](002-lenguaje-y-runtime.md)).
 
 Importa más allá del tamaño: una imagen `distroless` **no tiene intérprete de
 comandos**. No se puede abrir una sesión dentro del contenedor, lo que reduce

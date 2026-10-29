@@ -203,7 +203,7 @@ La segmentación es la que hace verificable la afirmación de disponibilidad: si
 | ADR | Decisión | Alternativa principal descartada |
 |---|---|---|
 | 001 | Plataforma híbrida: LAN municipal más nube | Cloud-native íntegro |
-| 002 | Go como lenguaje y tiempo de ejecución | Java con Spring Boot |
+| 002 | Go como lenguaje, por decisión del equipo | Java con Spring Boot |
 | 003 | Monorepo con un módulo independiente por servicio | Módulo único compartido |
 | 004 | Kafka en modo KRaft, sin Zookeeper | RabbitMQ |
 | 005 | PostgreSQL relacional más Elasticsearch | Base de series de tiempo |
@@ -226,19 +226,21 @@ La consecuencia más interesante de esa decisión es que definió por sí sola d
 
 ## Por qué Go y no Java con Spring Boot
 
-La elección de lenguaje es de las más caras de revertir, porque cambiarlo equivale a reescribir el sistema (ADR-002). Para el problema que se resuelve habrían servido varios lenguajes, de modo que el criterio no fue la elegancia ni la familiaridad, sino cuánto cuesta operar el resultado: los servicios conviven con Kafka y Redis en dos servidores propios que no crecen, y quien los opere es un equipo reducido sin un especialista en máquinas virtuales.
+La elección de lenguaje es de las más caras de revertir, porque cambiarlo equivale a reescribir el sistema (ADR-002). Conviene decir primero algo que la presentación del proyecto dejó claro: para este sistema habrían servido varios lenguajes. Con un volumen de decenas de eventos por segundo, Java con Spring Boot, Python o Node.js pueden ingerir, correlacionar y archivar los eventos con holgura. Java cuenta además con el cliente de Kafka más maduro, con productor idempotente completo, y permite confirmar los offsets manualmente. Las decisiones que hacen correcto este sistema salen de razonar el dominio y se habrían tomado igual en cualquier lenguaje.
 
-Frente a Java con Spring Boot, que es el stack más extendido y cuenta con el cliente de Kafka más maduro, pesó la huella. Una imagen base de Java (eclipse-temurin 17 sobre Alpine) ocupa 257 MB antes de añadir la aplicación, y un servicio Spring Boot consume del orden de cientos de megabytes. Los servicios en Go se midieron en 22 a 29 MB de imagen completa, 13 a 18 MB de memoria residente y 7 a 50 milisegundos de arranque. Con los servicios, Kafka, Redis, Prometheus y Grafana repartidos en dos máquinas, esa diferencia decide si la plataforma cabe holgada o al límite. Además, un arranque en milisegundos hace que reiniciar un contenedor no interrumpa la ingesta.
+La razón por la que se eligió Go es del equipo y no del problema: ninguno de nosotros había programado en ese lenguaje y el proyecto era una buena oportunidad para aprenderlo. Otros lenguajes nos habrían dado un camino más corto y con menos tropiezos, y lo sabíamos; elegimos el más difícil a propósito. Un proyecto de curso produce el sistema y también lo que el equipo aprende al construirlo, y quisimos que eso incluyera un lenguaje nuevo y muy usado en infraestructura: están escritos en Go varios de los programas que usamos en este mismo proyecto, como Prometheus, Grafana y Docker. Es una razón válida para un proyecto académico. Para un cliente que paga por un sistema, la elección natural habría sido el lenguaje que el equipo ya domina.
 
-Hubo también una razón de diseño y no solo de recursos. Las abstracciones de Spring sobre Kafka ocultan justamente lo que este sistema necesita controlar: cuándo se confirma un offset y cuándo se considera publicado un mensaje, que son decisiones centrales de la resiliencia (ADR-006). En Go confirmar manualmente es una línea de código; con el framework habría que pelear contra la abstracción para tomar la misma decisión.
+Al usarlo encontramos ventajas que no fueron la causa de la elección, pero que hacen razonable defenderla:
 
-Node.js con TypeScript y Python se descartaron por otras razones. Su modelo de un solo hilo efectivo obliga a multiplicar procesos para sostener a la vez la correlación, el consumo de Kafka y la atención de peticiones, lo que devuelve la huella que se quería ahorrar. Exigen llevar un intérprete y sus dependencias dentro de la imagen. Y el tipado dinámico es un riesgo en un sistema cuyo núcleo es un contrato de datos, porque los errores de forma aparecen en ejecución.
+- **Un binario por servicio, sin runtime externo.** Imágenes de 22 a 29 MB, memoria residente de 13 a 18 MB y arranque en milisegundos, frente a los 257 MB que ocupa una imagen base de Java antes de añadir la aplicación. Es una diferencia real, pero a este volumen no es decisiva.
+- **Una concurrencia que encaja con el problema.** El persister acumula un lote mientras vence un temporizador y atiende una señal de apagado con tres goroutines y un `select`.
+- **Pocas dependencias y las mismas herramientas para todos.** Entre tres y siete bibliotecas directas por servicio, y herramientas de serie (`gofmt`, `go vet` y las pruebas) que dan a todo el equipo las mismas reglas de formato y de verificación.
 
-Se aceptaron tres costos de forma explícita:
+También tuvo costos, que se aceptaron de forma explícita:
 
-- **Sin productor idempotente.** La biblioteca de Kafka elegida (`segmentio/kafka-go`) no lo implementa por completo, y la alternativa (`confluent-kafka-go`) depende de una librería en C que habría eliminado el binario estático, una de las razones de elegir Go. Se compensó con idempotencia en el consumidor: reserva del identificador del evento en Redis en el ingestor y el correlator, e inserción que ignora duplicados en el persister. Esa garantía protege además contra reprocesos por rebalanceo o reinicio, no solo contra reintentos de escritura.
-- **Trabajo que Spring habría dado resuelto.** Carga de configuración, middleware HTTP y registro de métricas: unas cuatrocientas líneas que hay que mantener.
-- **Curva de aprendizaje y continuidad.** Con fecha de entrega fija y, si quien herede el sistema conoce Java y no Go, un costo de adopción. Se mitigó sin usar framework, de modo que lo que hay que entender es el lenguaje y no un ecosistema; con código que explica el porqué de cada decisión no evidente; y con contratos que son esquemas JSON y no bibliotecas, de manera que un servicio puede reescribirse en otro lenguaje sin tocar a los demás (ADR-003).
+- **Sin productor idempotente.** La biblioteca de Kafka elegida (`segmentio/kafka-go`) no lo implementa por completo, y la alternativa (`confluent-kafka-go`) depende de una librería en C que habría eliminado el binario estático. Se compensó con idempotencia en el consumidor, que protege además contra reprocesos por rebalanceo o reinicio. Con Java no habría hecho falta.
+- **Tiempo.** Aprender el lenguaje y escribir lo que Spring habría dado resuelto (configuración, middleware HTTP y registro de métricas, unas cuatrocientas líneas) consumió tiempo que pudo ir a la documentación.
+- **Riesgo de continuidad.** Si quien herede el sistema conoce Java y no Go, hay un costo de adopción. Se mitigó sin usar framework y con contratos que son esquemas JSON y no bibliotecas, de modo que un servicio puede reescribirse en otro lenguaje, de a uno y sin tocar a los demás (ADR-003).
 
 ## Transporte y resiliencia
 
@@ -462,7 +464,7 @@ El orden de ejecución importa y está fijado: los agregados corren antes que la
 | Métrica | Valor |
 |---|---|
 | Tamaño de imagen de contenedor | 22 – 29 MB |
-| Memoria residente por servicio | 15 – 19 MB |
+| Memoria residente por servicio | 13 – 18 MB |
 | Tiempo de arranque | 7 – 50 ms |
 :::
 
@@ -533,7 +535,7 @@ Los 42 paneles se verificaron enviando a sus respectivos motores el texto exacto
 
 # Conclusiones
 
-En conclusión, un sistema de monitoreo urbano no se diseña eligiendo las mejores tecnologías, sino decidiendo primero qué no puede fallar y para quién. Para una municipalidad con un equipo de sistemas reducido, lo que no puede fallar es la detección de incidentes cuando se cae el enlace a internet. De esa sola premisa se desprendió casi todo lo demás: dónde pasa la frontera entre la red municipal y la nube, dónde se protegen las placas, por qué no se adoptó Kubernetes ni Airflow y por qué se eligió un lenguaje liviano como GO.
+En conclusión, un sistema de monitoreo urbano no se diseña eligiendo las mejores tecnologías, sino decidiendo primero qué no puede fallar y para quién. Para una municipalidad con un equipo de sistemas reducido, lo que no puede fallar es la detección de incidentes cuando se cae el enlace a internet. De esa sola premisa se desprendió casi todo lo demás: dónde pasa la frontera entre la red municipal y la nube, dónde se protegen las placas y por qué no se adoptó Kubernetes ni Airflow. La elección de Go fue la excepción: la tomó el equipo para aprender un lenguaje nuevo, y Java habría servido igual.
 
 Lo que hizo creíble el diseño no fue construirlo, sino intentar romperlo. Los defectos más serios no producían ningún error: una regla que nunca podía dispararse, una alerta que no encontraba su serie, un consumidor sin particiones asignadas. Solo aparecieron al verificar contra el sistema en ejecución, y las cifras que parecían buenas resultaron, más de una vez, ser un artefacto de la medición.
 

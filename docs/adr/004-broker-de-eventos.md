@@ -165,8 +165,8 @@ Usar `geo.zone` corrige ambos. Es además lo que prescribe la guía del curso
 
 ### 3.4 El cliente y el productor idempotente
 
-Se usa `segmentio/kafka-go`, en Go puro, para conservar el binario estático que
-justifica la imagen mínima del [ADR-002](002-lenguaje-y-runtime.md).
+Se usa `segmentio/kafka-go`, en Go puro, para conservar el binario estático de Go y sus imágenes mínimas, una de las
+ventajas del lenguaje elegido por el equipo ([ADR-002](002-lenguaje-y-runtime.md)).
 
 La contrapartida es que **no ofrece productor idempotente completo**, que la
 guía recomienda. Se compensa con idempotencia en el consumidor —`SET NX` sobre

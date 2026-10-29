@@ -464,158 +464,179 @@ formato APA 7 en el informe final:
 
 # ADR-002: Lenguaje y runtime de los microservicios — Go
 
-**Estado:** aceptado
+**Estado:** aceptado (razonamiento revisado el 2026-10-28)
 **Fecha:** 2026-09-21
-**Decide:** equipo de arquitectura
-**Relacionado con:** [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube) (el hardware on-premise acota los recursos disponibles)
+**Decide:** el equipo
+**Relacionado con:** [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube) (el hardware on-premise acota los recursos disponibles), [ADR-003](#adr-003-organización-del-repositorio-monorepo-con-módulos-independientes) (el contrato es un schema, no una biblioteca: un servicio puede reescribirse en otro lenguaje)
 
 ---
 
+> **Nota de revisión.** Este ADR se revisó después de presentar el proyecto. La
+> versión original justificaba Go con argumentos técnicos: la huella de los
+> programas y el control sobre Kafka. En la presentación se objetó que Java ya
+> hace lo que hicimos en Go, y la objeción es correcta en lo esencial. Esta
+> versión dice cuál fue la razón real de la decisión y deja los argumentos
+> técnicos donde corresponden: ventajas que comprobamos al usar el lenguaje, no
+> la causa de haberlo elegido.
+
 ## 1. Contexto
 
-Hay que elegir el lenguaje y el tiempo de ejecución de los seis microservicios. Es de las decisiones más caras de revertir del proyecto: una
-vez escrito el sistema, cambiar de lenguaje significa escribirlo otra vez.
+Hay que elegir el lenguaje y el tiempo de ejecución de los seis microservicios.
+Es una de las decisiones más caras de revertir del proyecto: una vez escrito el
+sistema, cambiar de lenguaje significa escribirlo otra vez. El enunciado
+(sección 5) presenta su stack como punto de partida y no como imposición, y
+admite modificarlo siempre que la decisión quede registrada como ADR.
 
-El enunciado (sección 5) presenta su stack como **punto de partida, no como
-imposición**, y admite explícitamente modificarlo o reemplazarlo siempre que la
-decisión quede registrada como ADR.
+Dos hechos pesan sobre la elección.
 
-Dos hechos del contexto pesan sobre la elección, y ambos vienen del cliente
-declarado en [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube):
+**Varios lenguajes habrían servido.** El volumen estimado es de 20 a 100 eventos
+por segundo ([ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube)). Java con Spring Boot,
+Python, Node.js o Go pueden ingerir esos eventos, correlacionarlos en ventanas,
+consumir de Kafka y escribir en PostgreSQL con holgura. Ninguna de las opciones
+queda descartada por no poder hacer el trabajo.
 
-**El hardware es limitado y propio.** La detección corre en servidores del
-centro de datos municipal. Sobre esas dos máquinas conviven los seis microservicios, Kafka, Redis, la observabilidad y el sistema operativo. Cada
-megabyte que consume un servicio es un megabyte que no está disponible para el
-broker, y **no hay elasticidad**: el hardware es el que se compró.
+**Ninguno de nosotros había programado antes en Go.** Los otros lenguajes que
+se consideraron sí los habíamos usado. Elegir entre ellos habría sido, para el
+equipo, el camino conocido.
 
-**El equipo que lo opera es reducido.** No hay una persona dedicada a ajustar
-una máquina virtual, diagnosticar pausas del recolector de basura o dimensionar
-montones de memoria. Toda especialidad que el sistema exija es una especialidad
-que alguien tendrá que adquirir o contratar.
-
-De ahí el criterio: entre lenguajes que resuelven el problema igual de bien
-—y son varios—, decide **cuánto cuesta operar el resultado**.
+Como la capacidad técnica no separa a las opciones, lo que decide es otra
+pregunta: además del sistema, qué queremos llevarnos de este proyecto.
 
 ## 2. Opciones consideradas
 
 ### Opción A — Java con Spring Boot
 
-Es el stack de referencia implícito del curso y el más extendido en sistemas
-empresariales de este tipo.
+Es el stack más extendido en sistemas empresariales de este tipo.
 
 **A favor**
 
 - **El cliente de Kafka para Java es el más maduro del ecosistema**, con
   productor idempotente completo, que es lo que la guía recomienda.
-- Spring Boot aporta mucho resuelto: inyección de dependencias, validación,
-  abstracciones sobre Kafka, endpoints de salud y métricas.
-- Es lo que más probablemente conozca quien herede el sistema.
-- Ecosistema enorme: para cualquier problema hay biblioteca y documentación.
+- Spring Kafka permite confirmar los offsets manualmente, de modo que el control
+  que este sistema necesita (confirmar después de procesar) también está
+  disponible allí.
+- Spring Boot aporta resueltos la inyección de dependencias, la validación, las
+  abstracciones sobre Kafka y los puntos de salud y métricas.
+- Menor curva de aprendizaje para el equipo y más personal capaz de mantenerlo.
 
 **En contra**
 
-- **La huella de la máquina virtual es la restricción real** sobre hardware
-  propio y acotado. Una imagen base de Java ronda los 250 MB antes de añadir la
-  aplicación, y el consumo típico de un servicio Spring Boot está en el orden
-  de los cientos de megabytes.
-- Arranque en segundos, no en milisegundos: reiniciar un contenedor es una
-  interrupción perceptible del servicio.
-- Ajustar la máquina virtual es una especialidad, y el equipo que operará el
-  sistema no la tiene.
-- **Las abstracciones de Spring sobre Kafka ocultan justamente lo que este
-  sistema necesita controlar**: cuándo se confirma un offset y cuándo se
-  considera publicado un mensaje. Son decisiones centrales del
-  [ADR-006](#adr-006-resiliencia-y-tolerancia-a-fallos), y pelearse con una
-  abstracción para tomarlas es peor que escribirlas.
+- Una imagen base de Java ronda los 250 MB antes de añadir la aplicación, y un
+  servicio Spring Boot consume del orden de cientos de megabytes. La diferencia
+  con Go es real, pero a este volumen y sobre el hardware del laboratorio **no
+  es decisiva**.
+- Arranca en segundos y no en milisegundos.
+- No representa ningún reto de aprendizaje para el equipo.
 
 ### Opción B — Node.js con TypeScript, o Python
 
 **A favor**
 
 - Desarrollo rápido y curva de aprendizaje suave.
-- Python encaja bien con el resto del ecosistema de simulación y análisis.
+- Python encaja bien con el análisis de datos.
 - Huella menor que la de una máquina virtual de Java.
 
 **En contra**
 
-- **Un solo hilo de ejecución efectivo.** La correlación evalúa reglas sobre
-  ventanas mientras consume de Kafka y atiende peticiones HTTP; el modelo de un
-  solo hilo obliga a rodearlo con procesos, y eso multiplica la huella que se
-  quería ahorrar.
 - Sigue haciendo falta un intérprete y sus dependencias dentro de la imagen: no
   hay binario autocontenido.
-- El tipado dinámico de Python es un riesgo real en un sistema cuyo núcleo es
-  un contrato de datos: los errores de forma aparecen en ejecución.
+- El tipado dinámico es un riesgo en un sistema cuyo núcleo es un contrato de
+  datos: los errores de forma aparecen en ejecución.
+- Tampoco supone un reto de aprendizaje.
 
 ### Opción C — Go
 
 **A favor**
 
-- **Binario estático sin runtime externo**: imágenes de contenedor un orden de
-  magnitud más pequeñas y memoria residente en decenas de megabytes.
-- Arranque en milisegundos, lo que hace que reiniciar un contenedor sea
-  imperceptible en lugar de una interrupción.
-- Sin máquina virtual que ajustar ni montón de memoria que dimensionar: un
-  equipo reducido no necesita esa especialidad.
-- **El modelo de concurrencia encaja con la forma del problema.** El persister
-  acumula lotes mientras vence un temporizador y atiende una señal de apagado:
-  eso son tres goroutines y un `select`, no un framework.
-- Menos dependencias, y por tanto menos superficie que auditar.
-- El binario estático permite una imagen `distroless` sin intérprete de
-  comandos, lo que reduce lo que un atacante puede hacer dentro del contenedor.
+- **Es un lenguaje nuevo para todo el equipo**, y con él se aprende a trabajar
+  con concurrencia, binarios estáticos y herramientas de infraestructura.
+- Binario estático sin runtime externo, imágenes pequeñas y arranque en
+  milisegundos.
+- Un modelo de concurrencia (goroutines y `select`) que encaja con la forma de
+  los servicios que consumen de Kafka.
+- Biblioteca estándar suficiente para HTTP, configuración y registros, sin
+  framework.
+- Herramientas de serie (`go test`, `go vet`, `gofmt`), que dan a todo el equipo
+  las mismas reglas de formato y de verificación.
 
 **En contra**
 
 - **Curva de aprendizaje**, con una fecha de entrega fija.
 - **El ecosistema de Kafka en Go es menos maduro.** `segmentio/kafka-go` no
-  ofrece productor idempotente completo, que la guía recomienda.
+  ofrece productor idempotente completo.
 - Hay que escribir a mano lo que Spring daría resuelto: carga de configuración,
   middleware HTTP, registro de métricas.
-- **Consume tiempo que podría ir a la documentación**, que pesa más en la
-  evaluación que la implementación.
+- Menos personal conoce el lenguaje que el que conoce Java.
 
 ## 3. Decisión
 
-**Se adopta Go (opción C).**
+**Se adopta Go (opción C), por decisión del equipo.**
 
-### 3.1 Lo que decide es la huella sobre hardware que no crece
+### 3.1 La razón: un reto que quisimos tomar
 
-El criterio no es la elegancia del lenguaje: es que los servicios conviven con
-Kafka y Redis en dos máquinas fijas.
+Decidimos usar Go porque ninguno de nosotros había programado en ese lenguaje y
+el proyecto era una buena oportunidad para aprenderlo. Otros lenguajes nos
+habrían dado un camino más corto y con menos tropiezos, y lo sabíamos: elegimos
+el más difícil a propósito.
 
-| Aspecto | Medido en este sistema |
-|---|---|
-| Tamaño de imagen | 22 – 29 MB por servicio, completa |
-| Memoria residente | 13 – 18 MB por servicio |
-| Tiempo de arranque | 7 – 50 ms |
+Un proyecto de curso produce dos cosas, el sistema y lo que el equipo aprende al
+construirlo. Quisimos que lo segundo incluyera un lenguaje nuevo, y uno que se
+usa mucho en infraestructura: están escritos en Go varios de los programas que
+usamos en este mismo proyecto, como Prometheus, Grafana y Docker. Programar en
+el lenguaje de las herramientas que se operan ayuda a entender cómo funcionan.
 
-Frente a eso, una imagen base de Java —`eclipse-temurin:17-jre-alpine`, **257
-MB antes de añadir la aplicación**— y un consumo de Spring Boot en el orden de
-los cientos de megabytes.
+Esta razón se escribe así porque es la verdadera. Y conviene decir hasta dónde
+llega: es una razón válida para un proyecto académico. No lo sería, por sí sola,
+para un cliente que paga por un sistema; ahí la elección natural habría sido el
+lenguaje que el equipo ya domina, y es lo que sugerimos si otro equipo recibe
+este sistema (ver 4).
 
-Con seis servicios más Kafka, Redis, Prometheus, Grafana, el motor de rutas y el sistema
-operativo sobre dos máquinas, esa diferencia no es cosmética: **decide si la
-plataforma cabe holgada o al límite**.
+### 3.2 Lo que reconocemos: otros lenguajes habrían podido hacerlo
 
-### 3.2 Lo que Go no aporta, y conviene no atribuirle
+Java con Spring Boot habría cubierto lo mismo que hicimos en Go. Tiene un
+cliente de Kafka con productor idempotente completo, permite confirmar offsets
+manualmente y trae resuelta buena parte de lo que escribimos a mano. Las
+decisiones que hacen correcto este sistema (evaluar la caída de velocidad sobre
+la lista completa, confirmar el offset después de procesar, tratar la confianza
+como un número real) salen de razonar el dominio y se habrían tomado igual en
+cualquiera de las opciones.
 
-Un lenguaje no encuentra errores de diseño. Las decisiones que hacen correcto
-este sistema —evaluar la caída de velocidad sobre la lista completa, tratar la
-confianza como un número real, confirmar el offset después de procesar— salen
-de razonar el dominio, y se habrían tomado igual en cualquiera de las tres
-opciones.
+Tampoco la huella decide. La diferencia entre un binario de 25 MB y una imagen
+Java existe, y se mide más abajo, pero con seis servicios y un volumen de
+decenas de eventos por segundo ninguna de las dos opciones deja al sistema sin
+recursos.
 
-Atribuirle al lenguaje méritos que corresponden al diseño se desarma en cuanto
-alguien pregunte cómo exactamente.
+### 3.3 Ventajas que encontramos al usarlo
 
-### 3.3 El compromiso sobre la idempotencia del productor
+No fueron la causa de elegir Go, pero hacen que la elección sea razonable de
+defender, y las comprobamos en el sistema en ejecución:
+
+- **Un binario por servicio, sin runtime externo.** Imágenes de 22 a 29 MB,
+  memoria residente de 13 a 18 MB y arranque en milisegundos (ver 5). Reiniciar
+  un contenedor no interrumpe la ingesta de forma perceptible.
+- **Concurrencia que encaja con el problema.** El persister acumula un lote
+  mientras vence un temporizador y atiende una señal de apagado: tres goroutines
+  y un `select`, no un framework.
+- **Pocas dependencias.** Entre tres y siete bibliotecas directas por servicio
+  (`jobs` usa solo tres), todas justificables una a una, lo que reduce la
+  superficie que auditar.
+- **Las mismas herramientas para todos.** `gofmt`, `go vet` y las pruebas
+  automáticas corren dentro de `make check`, de modo que el código de cualquier
+  integrante pasa por las mismas comprobaciones antes de aceptarse.
+- **Imágenes `distroless`.** El binario estático permite una imagen sin
+  intérprete de comandos, lo que reduce lo que se puede hacer dentro del
+  contenedor ([ADR-010](#adr-010-contenerización-y-orquestación-docker-compose-sin-kubernetes)).
+- **Un lenguaje pequeño.** Hay poco que aprender antes de escribir código útil,
+  lo que facilita que todo el equipo pueda aportar aun partiendo de cero.
+
+### 3.4 El compromiso sobre la idempotencia del productor
 
 Es la renuncia más seria de esta decisión y conviene decirla sin rodeos.
 
 La guía recomienda `enable.idempotence=true` en el productor.
 `segmentio/kafka-go` no lo implementa por completo; `confluent-kafka-go` sí,
 pero depende de librdkafka vía cgo, lo que elimina el binario estático y con él
-la imagen mínima, que es una de las razones de elegir Go.
+la imagen mínima, una de las ventajas de Go.
 
 Se optó por `segmentio/kafka-go` con `acks=all` e **idempotencia en el
 consumidor**: `SET NX` sobre el identificador de evento en el ingestor y el
@@ -624,46 +645,74 @@ amplia que la del productor, porque protege también contra reprocesos por
 rebalanceo o reinicio, no solo contra reintentos de escritura. El detalle está
 en [ADR-006](#adr-006-resiliencia-y-tolerancia-a-fallos).
 
-Aun así es un compromiso: se renunció a una recomendación explícita de la guía
-a cambio de una propiedad de despliegue, y se compensó por otra vía.
+Aun así es un compromiso: con Java no habría hecho falta compensarlo.
+
+### 3.5 Cómo acotamos el riesgo de aprender sobre la marcha
+
+Elegir un lenguaje que no se conoce tiene un riesgo evidente, y lo tratamos
+como tal:
+
+- **Sin framework.** Biblioteca estándar para HTTP, configuración y registros,
+  de modo que lo que hay que entender es el lenguaje y no un ecosistema.
+- **Verificación automática.** Formato, `vet`, pruebas y comprobación de
+  contratos corren juntos en `make check`.
+- **Verificar contra el sistema en ejecución**, no solo con pruebas unitarias.
+  Así aparecieron defectos que ningún compilador marca, como una limpieza que
+  heredaba un contexto cancelado ([ADR-006](#adr-006-resiliencia-y-tolerancia-a-fallos) §3.6).
+- **Cada decisión no evidente, comentada en el código** y registrada en un ADR.
 
 ## 4. Consecuencias
 
 ### Positivas
 
-- Huella verificada un orden de magnitud menor que la alternativa, sobre
-  hardware que no es elástico.
-- Reinicios imperceptibles: un despliegue no interrumpe la ingesta.
-- Control explícito sobre lo que importa. Confirmar offsets manualmente es una
-  línea de código, no una pelea contra la abstracción del framework.
-- Imágenes `distroless` sin intérprete de comandos ni gestor de paquetes, lo
-  que reduce la superficie de ataque y sostiene el ADR de seguridad.
-- Menos dependencias directas: entre tres y siete bibliotecas directas por servicio (jobs usa solo tres), todas
-  justificables una a una.
+- **Aprendizaje compartido.** Ninguno partía con ventaja en el lenguaje, lo que
+  nivela al equipo y hace que el conocimiento sea de todos.
+- Familiaridad con el lenguaje en el que están hechas varias herramientas de
+  infraestructura que usamos.
+- Las ventajas técnicas del apartado 3.3: imágenes pequeñas, reinicios
+  imperceptibles y pocas dependencias.
+- Control explícito sobre lo que importa: confirmar offsets manualmente es una
+  línea de código.
 
 ### Negativas aceptadas
 
-- **Tiempo invertido en escribir lo que un framework habría dado resuelto.**
-  Carga de configuración, middleware, registro de métricas: alrededor de
-  cuatrocientas líneas que hay que mantener.
-- **Curva de aprendizaje** con fecha fija. Se mitigó manteniendo el diseño
-  deliberadamente simple: biblioteca estándar para HTTP, configuración y
-  registros, sin framework.
-- **Sin productor idempotente**, según lo explicado arriba.
+- **Tiempo.** Aprender el lenguaje y escribir lo que un framework habría dado
+  resuelto (carga de configuración, middleware, registro de métricas: alrededor
+  de cuatrocientas líneas que hay que mantener) consumió tiempo que pudo ir a la
+  documentación, que pesa más en la evaluación que la implementación.
+- **Más riesgo que con un lenguaje conocido.** Se acotó como se explica en 3.5,
+  pero no desaparece.
+- **Sin productor idempotente**, según lo explicado en 3.4.
 - **El ecosistema obliga a elegir con cuidado.** La biblioteca de validación
-  contra JSON Schema con soporte de *draft 2020-12* —el que exige el contrato
-  canónico— tenía una sola opción viable.
+  contra JSON Schema con soporte de *draft 2020-12*, el que exige el contrato
+  canónico, tenía una sola opción viable.
+- **La razón es del equipo, no del cliente.** La decisión sirve al objetivo de
+  aprender, no al de minimizar el riesgo de una institución que heredara el
+  sistema.
 
 ### Riesgo de continuidad
 
 Si el equipo que mantenga el sistema sabe Java y no Go, esta decisión le impone
 un costo. Se mitiga con tres cosas: el código está comentado explicando el
-porqué de cada decisión no evidente, no usa framework alguno —de modo que lo
-que hay que entender es el lenguaje y no un ecosistema— y los contratos son
-JSON Schema, independientes del lenguaje: reescribir un servicio en otro
-lenguaje no obliga a tocar los demás.
+porqué de cada decisión no evidente, no usa framework alguno, y los contratos
+son JSON Schema, independientes del lenguaje. Por eso un servicio puede
+reescribirse en otro lenguaje, de a uno y sin detener el sistema, sin tocar los
+demás ([ADR-003](#adr-003-organización-del-repositorio-monorepo-con-módulos-independientes)). Si la Municipalidad
+tomara este sistema como base de producción y su equipo trabajara en otro
+lenguaje, esa es la ruta que recomendamos.
+
+### Cuándo revisar esta decisión
+
+- Si el sistema pasa a producción y lo mantiene un equipo que domina otro
+  lenguaje.
+- Si la ausencia de productor idempotente se vuelve un problema real y se
+  necesita una garantía de entrega exactamente una vez.
 
 ## 5. Evidencia medida
+
+Estas cifras ilustran las ventajas del apartado 3.3. **No son la razón de la
+decisión**, y no prueban que Go sea mejor que Java para este sistema: solo
+miden lo que obtuvimos.
 
 Medido el 21 de septiembre de 2026 sobre el sistema en ejecución.
 
@@ -713,7 +762,8 @@ del objetivo de 2 segundos**.
 
 > Estas cifras corresponden a un entorno de laboratorio sobre una sola máquina.
 > Sirven para comparar órdenes de magnitud y para verificar que el sistema
-> cumple su objetivo, no como proyección de capacidad en producción.
+> cumple su objetivo, no como proyección de capacidad en producción. Un sistema
+> equivalente en otro lenguaje podría cumplir el mismo objetivo.
 
 ## 6. Impacto en el negocio
 
@@ -721,44 +771,46 @@ del objetivo de 2 segundos**.
 
 ### Qué se decidió
 
-Construir los programas del sistema en un lenguaje de programación **liviano y
-autocontenido**, en lugar del más habitual en este tipo de sistemas.
+Programar los componentes del sistema en **Go**, un lenguaje que el equipo no
+conocía, por decisión propia del equipo y con el fin de aprender.
 
 ### Por qué
 
-Los programas resultantes ocupan **alrededor de diez veces menos** espacio y
-memoria que los de la alternativa evaluada. Como el sistema va a funcionar en
-equipos comprados por la Municipalidad, y esos equipos no se pueden ampliar
-sobre la marcha, consumir menos significa que la misma inversión en hardware
-alcanza para más, o que alcanza con menos equipos.
+No porque fuera la opción técnicamente única: otros lenguajes más conocidos
+habrían servido igual y con menos riesgo. Se eligió porque el proyecto es
+también un ejercicio de aprendizaje, y el equipo quiso aprovecharlo para
+trabajar con un lenguaje nuevo, muy usado en infraestructura.
 
-Además arrancan en milisegundos en lugar de segundos, lo que hace que
-actualizar el sistema no interrumpa el servicio de forma perceptible.
-
-La tercera razón es de personal: la alternativa habitual requiere ajustes
-especializados de rendimiento que exigen una persona con esa formación. El
-equipo de sistemas de la Municipalidad es reducido, y esta opción no lo
-necesita.
+Como beneficio práctico, los programas resultantes son pequeños (alrededor de
+25 MB cada uno) y arrancan en milisegundos, de modo que actualizar el sistema
+no interrumpe el servicio de forma perceptible y los equipos necesarios son
+modestos.
 
 ### Qué costó
 
-**Tiempo.** Este lenguaje trae menos cosas resueltas de fábrica, de modo que
-hubo que escribir a mano piezas que la alternativa habría aportado. Es la
-contrapartida honesta de la decisión.
+**Tiempo y riesgo.** Aprender un lenguaje durante el proyecto consumió horas que
+habrían podido dedicarse a otras tareas, y un lenguaje desconocido tiene más
+probabilidad de errores. Se atenuó con verificaciones automáticas y probando el
+sistema en funcionamiento.
 
-También supone que quien mantenga el sistema en el futuro debe conocer este
-lenguaje. Se atenuó manteniendo los programas deliberadamente simples y
-documentados, y usando formatos de datos independientes del lenguaje, de modo
-que cualquier componente pueda reescribirse en el futuro sin afectar a los
-demás.
+También supone que quien mantenga el sistema debe conocer este lenguaje, y hay
+menos personas que lo conocen que las que conocen Java.
+
+### Qué significa para la Municipalidad
+
+Si la Municipalidad quiere usar este sistema y su equipo trabaja en otro
+lenguaje, **no tiene que rehacerlo todo**. Cada componente se comunica con los
+demás mediante formatos independientes del lenguaje, de modo que puede
+reescribirse de uno en uno, sin detener el sistema.
 
 ### Riesgo
 
 | Riesgo | Probabilidad | Impacto | Cómo se atiende |
 |---|---|---|---|
-| El personal futuro no conoce el lenguaje | Media | Medio | Código documentado, sin framework, contratos independientes del lenguaje |
+| El personal futuro no conoce el lenguaje | Media | Medio | Código documentado, sin framework, contratos independientes del lenguaje: se puede reescribir componente a componente |
+| El equipo comete errores por inexperiencia en el lenguaje | Media | Medio | Formato, análisis y pruebas automáticas, y verificación contra el sistema en ejecución |
 | Herramientas menos maduras que las de la alternativa | Baja | Bajo | Verificado en funcionamiento; las carencias se compensaron por otra vía |
-| El tiempo invertido reste a otros entregables | Alta | Medio | Riesgo asumido de forma consciente |
+| El tiempo de aprendizaje resta a otros entregables | Alta | Medio | Riesgo asumido de forma consciente |
 
 ---
 
@@ -766,8 +818,10 @@ demás.
 
 - Enunciado del proyecto final, secciones 4 y 5 — el stack es punto de partida,
   no imposición.
-- [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube) — el hardware on-premise es la
-  restricción que da peso a la huella.
+- [ADR-001](#adr-001-plataforma-de-despliegue-híbrido-lan-nube) — el volumen estimado y el
+  hardware on-premise.
+- [ADR-003](#adr-003-organización-del-repositorio-monorepo-con-módulos-independientes) — el contrato como schema
+  permite reescribir un servicio en otro lenguaje.
 - [ADR-006](#adr-006-resiliencia-y-tolerancia-a-fallos) — idempotencia en el
   consumidor como compensación del productor no idempotente.
 - [ADR-010](#adr-010-contenerización-y-orquestación-docker-compose-sin-kubernetes) — el binario estático es lo
@@ -1184,8 +1238,8 @@ Usar `geo.zone` corrige ambos. Es además lo que prescribe la guía del curso
 
 ### 3.4 El cliente y el productor idempotente
 
-Se usa `segmentio/kafka-go`, en Go puro, para conservar el binario estático que
-justifica la imagen mínima del [ADR-002](#adr-002-lenguaje-y-runtime-de-los-microservicios-go).
+Se usa `segmentio/kafka-go`, en Go puro, para conservar el binario estático de Go y sus imágenes mínimas, una de las
+ventajas del lenguaje elegido por el equipo ([ADR-002](#adr-002-lenguaje-y-runtime-de-los-microservicios-go)).
 
 La contrapartida es que **no ofrece productor idempotente completo**, que la
 guía recomienda. Se compensa con idempotencia en el consumidor —`SET NX` sobre
@@ -3660,8 +3714,9 @@ une antes de que exista su topic queda sin particiones y sin error
 ### 3.4 Las imágenes
 
 `distroless/static` sobre compilación en dos etapas. Las imágenes finales pesan
-entre **22 y 29 MB**, frente a los 257 MB que ocupa una imagen base de Java
-antes siquiera de añadir la aplicación ([ADR-002](#adr-002-lenguaje-y-runtime-de-los-microservicios-go)).
+entre **22 y 29 MB**, frente a los 257 MB que ocupa una imagen base de Java antes siquiera de añadir la
+aplicación. Es una referencia de contraste y no el motivo de haber elegido Go,
+que fue una decisión del equipo ([ADR-002](#adr-002-lenguaje-y-runtime-de-los-microservicios-go)).
 
 Importa más allá del tamaño: una imagen `distroless` **no tiene intérprete de
 comandos**. No se puede abrir una sesión dentro del contenedor, lo que reduce
